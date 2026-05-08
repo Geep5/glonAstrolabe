@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { snapshot, getObjectDetail, getObjectChanges, getAgentConversation, getAgentContextRefs, getRoot, search, getWalletPubkeys } from "./reader.js";
 	import { getCoinOverview } from "./reader.js";
 	import { getGlobalCoinStatsViaDaemon } from "./coins.js";
-	import { getPrograms, DAEMON_URL } from "./daemon-client.js";
+	import { getPrograms, DAEMON_URL, askAgent, recallBlock, injectObject } from "./daemon-client.js";
 	import { startWatcher, streamEvents, recentEvents } from "./events.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -69,26 +69,19 @@ app.get("/api/agents/:id/context", (req, res) => {
 	res.json({ agentId: req.params.id, agentName: c.agent.name, objectIds: c.objectIds });
 });
 
-	// Send a message to an agent. Proxies to the glon daemon at GLON_DISPATCH_URL.
+	// Send a message to an agent. Proxies to the glon daemon via RivetKit gateway.
 	app.post("/api/agents/:id/chat", async (req, res) => {
 		const { id } = req.params;
 		const { message } = req.body;
 		if (!message || typeof message !== "string") {
 			return res.status(400).json({ error: "message required" });
 		}
-		const dispatchUrl = process.env.GLON_DISPATCH_URL ?? DAEMON_URL;
 		try {
-			const r = await fetch(dispatchUrl, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ prefix: "/agent", action: "ask", args: [id, message] }),
-			});
-			if (!r.ok) {
-				const body = await r.text();
-				return res.status(502).json({ error: `glon daemon dispatch failed (${r.status})`, body });
+			const result = await askAgent(id, message);
+			if (result === null) {
+				return res.status(502).json({ error: "glon daemon dispatch failed (actor unreachable)" });
 			}
-			const data = await r.json();
-			res.json({ ok: true, agentId: id, message, result: data.result ?? data });
+			res.json({ ok: true, agentId: id, message, result });
 		} catch (err: any) {
 			res.status(503).json({ error: "could not reach glon daemon", detail: err?.message ?? String(err) });
 		}
@@ -96,27 +89,21 @@ app.get("/api/agents/:id/context", (req, res) => {
 // Inject an object into an agent's context: post a user_text via /agent ask
 // describing the object. Triggers one assistant turn but the reference stays
 // in context for every subsequent turn until the next compaction.
-app.post("/api/agents/:agentId/inject/:objectId", async (req, res) => {
-	const { agentId, objectId } = req.params;
-	const detail = getObjectDetail(objectId);
-	if (!detail) return res.status(404).json({ error: "object not found" });
-	const summary = injectSummary(detail);
-	const dispatchUrl = process.env.GLON_DISPATCH_URL ?? DAEMON_URL;
-	try {
-		const r = await fetch(dispatchUrl, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ prefix: "/agent", action: "ask", args: [agentId, summary] }),
-		});
-		if (!r.ok) {
-			const body = await r.text();
-			return res.status(502).json({ error: `glon daemon dispatch failed (${r.status})`, body });
+	app.post("/api/agents/:agentId/inject/:objectId", async (req, res) => {
+		const { agentId, objectId } = req.params;
+		const detail = getObjectDetail(objectId);
+		if (!detail) return res.status(404).json({ error: "object not found" });
+		const summary = injectSummary(detail);
+		try {
+			const result = await injectObject(agentId, summary);
+			if (result === null) {
+				return res.status(502).json({ error: "glon daemon dispatch failed (actor unreachable)" });
+			}
+			res.json({ ok: true, agentId, objectId, summary });
+		} catch (err: any) {
+			res.status(503).json({ error: "could not reach glon daemon", detail: err?.message ?? String(err) });
 		}
-		res.json({ ok: true, agentId, objectId, summary });
-	} catch (err: any) {
-		res.status(503).json({ error: "could not reach glon daemon", detail: err?.message ?? String(err) });
-	}
-});
+	});
 
 function injectSummary(detail: { object: { id: string; typeKey: string; name?: string }; rawFields: Record<string, unknown>; contentPreview?: string }): string {
 	const { object: obj, rawFields, contentPreview } = detail;
@@ -163,25 +150,18 @@ app.get("/api/events/recent", (_req, res) => {
 	// glon daemon at $GLON_DISPATCH_URL (default port 6420), which
 	// owns the actor that mutates the DAG. Returns the new block id so the
 	// frontend can re-fetch the conversation and highlight it.
-app.post("/api/agents/:id/recall/:blockId", async (req, res) => {
-	const { id, blockId } = req.params;
-	const dispatchUrl = process.env.GLON_DISPATCH_URL ?? DAEMON_URL;
-	try {
-		const r = await fetch(dispatchUrl, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ prefix: "/agent", action: "recall", args: [id, blockId] }),
-		});
-		if (!r.ok) {
-			const body = await r.text();
-			return res.status(502).json({ error: `glon daemon dispatch failed (${r.status})`, body });
+	app.post("/api/agents/:id/recall/:blockId", async (req, res) => {
+		const { id, blockId } = req.params;
+		try {
+			const result = await recallBlock(id, blockId);
+			if (result === null) {
+				return res.status(502).json({ error: "glon daemon dispatch failed (actor unreachable)" });
+			}
+			res.json({ ok: true, result });
+		} catch (err: any) {
+			res.status(503).json({ error: "could not reach glon daemon", detail: err?.message ?? String(err) });
 		}
-		const data = await r.json() as { result?: { newBlockId: string; sourceKind: string; truncated: boolean } };
-		res.json({ ok: true, ...(data.result ?? data) });
-	} catch (err: any) {
-		res.status(503).json({ error: "could not reach glon daemon", detail: err?.message ?? String(err) });
-	}
-});
+	});
 
 
 	// Planet Forge — AI-assisted planet styling. Proxies to OpenAI.
