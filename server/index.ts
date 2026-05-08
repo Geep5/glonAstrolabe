@@ -69,22 +69,21 @@ app.get("/api/agents/:id/context", (req, res) => {
 	res.json({ agentId: req.params.id, agentName: c.agent.name, objectIds: c.objectIds });
 });
 
-	// Send a message to an agent. Proxies to the glon daemon via RivetKit gateway.
+	// Send a message to an agent. Queues the ask asynchronously and returns
+	// immediately so the browser doesn't hang on long-running tasks (10-30 min).
+	// The UI polls /conversation to pick up the response when it arrives.
 	app.post("/api/agents/:id/chat", async (req, res) => {
 		const { id } = req.params;
 		const { message } = req.body;
 		if (!message || typeof message !== "string") {
 			return res.status(400).json({ error: "message required" });
 		}
-		try {
-			const result = await askAgent(id, message);
-			if (result === null) {
-				return res.status(502).json({ error: "glon daemon dispatch failed (actor unreachable)" });
-			}
-			res.json({ ok: true, agentId: id, message, result });
-		} catch (err: any) {
-			res.status(503).json({ error: "could not reach glon daemon", detail: err?.message ?? String(err) });
-		}
+		// Fire-and-forget: askAgent can take 10-30 min for complex tasks.
+		// We return immediately; the UI polls /conversation for the result.
+		askAgent(id, message).catch((err) => {
+			console.warn("[chat] background ask failed:", err?.message ?? String(err));
+		});
+		res.json({ ok: true, agentId: id, status: "accepted" });
 	});
 // Inject an object into an agent's context: post a user_text via /agent ask
 // describing the object. Triggers one assistant turn but the reference stays

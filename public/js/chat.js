@@ -336,18 +336,17 @@ class ChatWindow {
 	startPolling() {
 		clearInterval(this.polling);
 		let attempts = 0;
-		const maxAttempts = 60;
 		// Use the total block count (before the 50-msg cap) so conversations
 		// longer than 50 messages still trigger correctly when the assistant responds.
 		const prevCount = (this._chatBlockCount || 0) + 1; // +1 for the user message we just sent
+		const startTime = Date.now();
 
 		this.polling = setInterval(async () => {
 			attempts++;
-			if (attempts > maxAttempts) {
-				clearInterval(this.polling);
-				this.status.textContent = "No response yet — agent may still be processing.";
-				this.input.disabled = false;
-				return;
+			// Update status every 30s so the user knows we're still watching
+			if (attempts % 30 === 0) {
+				const elapsedMin = Math.round((Date.now() - startTime) / 60000);
+				this.status.textContent = `${this.agentName} is still processing (${elapsedMin}m)…`;
 			}
 			try {
 				const r = await fetch(`/api/agents/${encodeURIComponent(this.agentId)}/conversation`);
