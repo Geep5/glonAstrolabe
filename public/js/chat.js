@@ -331,6 +331,7 @@ class ChatWindow {
 				this.input.disabled = false;
 			}
 		}
+	}
 
 	startPolling() {
 		clearInterval(this.polling);
