@@ -246,6 +246,7 @@ class ChatWindow {
 
 	renderMessages(blocks) {
 		const chatBlocks = blocks.filter((b) => b.kind === "user_text" || b.kind === "assistant_text");
+		this._chatBlockCount = chatBlocks.length;
 		const visible = chatBlocks.slice(-50);
 
 		this.history.innerHTML = "";
@@ -326,7 +327,9 @@ class ChatWindow {
 		clearInterval(this.polling);
 		let attempts = 0;
 		const maxAttempts = 60;
-		const prevCount = this.history.children.length;
+		// Use the total block count (before the 50-msg cap) so conversations
+		// longer than 50 messages still trigger correctly when the assistant responds.
+		const prevCount = (this._chatBlockCount || 0) + 1; // +1 for the user message we just sent
 
 		this.polling = setInterval(async () => {
 			attempts++;
@@ -342,9 +345,8 @@ class ChatWindow {
 				const data = await r.json();
 				const blocks = data.blocks ?? [];
 				const chatBlocks = blocks.filter((b) => b.kind === "user_text" || b.kind === "assistant_text");
-				const visible = chatBlocks.slice(-50);
-				const last = visible[visible.length - 1];
-				if (last?.kind === "assistant_text" && visible.length > prevCount) {
+				const last = chatBlocks[chatBlocks.length - 1];
+				if (last?.kind === "assistant_text" && chatBlocks.length > prevCount) {
 					this.renderMessages(blocks);
 					clearInterval(this.polling);
 					this.status.textContent = "";
@@ -354,7 +356,6 @@ class ChatWindow {
 		}, 1000);
 	}
 	}
-
 	export function initAgentChats(agents) {
 		for (const agent of agents) {
 			openAgentChat(agent.id, agent.name);
