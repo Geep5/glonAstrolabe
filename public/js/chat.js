@@ -317,11 +317,20 @@ class ChatWindow {
 			this.status.className = "chat-status ok";
 			this.startPolling();
 		} catch (err) {
-			this.status.textContent = `Send failed: ${err?.message ?? err}`;
-			this.status.className = "chat-status err";
-			this.input.disabled = false;
+			// If the server timed out talking to the daemon, the message may still
+			// have been queued. Start polling so the response appears when ready.
+			const msg = err?.message ?? String(err);
+			const mightStillProcess = /502|503|504|timed out|timeout|dispatch failed/i.test(msg);
+			if (mightStillProcess) {
+				this.status.textContent = `${this.agentName} is still processing — will update when ready…`;
+				this.status.className = "chat-status ok";
+				this.startPolling();
+			} else {
+				this.status.textContent = `Send failed: ${msg}`;
+				this.status.className = "chat-status err";
+				this.input.disabled = false;
+			}
 		}
-	}
 
 	startPolling() {
 		clearInterval(this.polling);
