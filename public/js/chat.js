@@ -249,7 +249,14 @@ class ChatWindow {
 		this._chatBlockCount = chatBlocks.length;
 		const visible = chatBlocks.slice(-50);
 
+		// Preserve scroll position unless user is already near the bottom
+		const wasNearBottom = this.history.scrollHeight <= this.history.clientHeight + 20 ||
+			this.history.scrollTop + this.history.clientHeight >= this.history.scrollHeight - 20;
+
 		this.history.innerHTML = "";
+		const spacer = document.createElement("div");
+		spacer.style.flex = "1 1 auto";
+		this.history.appendChild(spacer);
 		for (const b of visible) {
 			const msg = document.createElement("div");
 			msg.className = `chat-msg ${b.kind === "user_text" ? "user" : "assistant"}`;
@@ -285,7 +292,9 @@ class ChatWindow {
 			}
 		}
 
-		this.history.scrollTop = this.history.scrollHeight;
+		if (wasNearBottom) {
+			this.history.scrollTop = this.history.scrollHeight;
+		}
 	}
 
 	async send() {

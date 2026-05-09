@@ -1106,6 +1106,7 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	.chat-window {
 		position: fixed;
 		width: 320px;
+		height: 480px;
 		background: rgba(12, 14, 20, 0.92);
 		border: 1px solid var(--stroke);
 		border-radius: 10px;
@@ -1174,6 +1175,7 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 		padding: 8px;
 	}
 
+
 	.chat-window .chat-history {
 		flex: 1;
 		min-height: 0;
@@ -1182,16 +1184,15 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 		padding: 6px 8px;
 		display: flex;
 		flex-direction: column;
-		justify-content: flex-end;
 		gap: 6px;
 	}
-.chat-window .chat-msg {
-	padding: 6px 10px;
-	border-radius: 8px;
-	font-size: 12px;
-	line-height: 1.4;
-	word-break: break-word;
-}
+	.chat-window .chat-msg {
+		padding: 6px 10px;
+		border-radius: 8px;
+		font-size: 12px;
+		line-height: 1.4;
+		word-break: break-word;
+	}
 
 .chat-window .chat-msg.user {
 	background: rgba(94, 234, 212, 0.1);
