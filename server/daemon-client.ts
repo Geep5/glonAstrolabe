@@ -15,8 +15,8 @@ const RIVET_HEADERS = {
 	"x-rivet-encoding": "json",
 } as const;
 
-/** Call an actor action through the RivetKit HTTP gateway. */
-async function actorAction<T = unknown>(
+	/** Call an actor action through the RivetKit HTTP gateway. */
+	async function actorAction<T = unknown>(
 	actorId: string,
 	actionName: string,
 	args: unknown[],
@@ -58,7 +58,7 @@ async function getStoreActorId(): Promise<string | null> {
 /** Map of program prefix → program object id (populated on first use). */
 let programPrefixCache: Map<string, string> | null = null;
 
-async function refreshProgramPrefixes(): Promise<Map<string, string>> {
+	async function refreshProgramPrefixes(): Promise<Map<string, string>> {
 	const cache = new Map<string, string>();
 	const storeId = await getStoreActorId();
 	if (!storeId) return cache;

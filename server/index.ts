@@ -207,7 +207,6 @@ app.get("/api/wallet", (_req, res) => {
 	app.get("/api/coins", (_req, res) => {
 		res.json(getCoinOverview());
 	});
-
 	// Global coin stats from SQLite index (daemon)
 	app.get("/api/coins/stats", async (_req, res) => {
 		const stats = await getGlobalCoinStatsViaDaemon();

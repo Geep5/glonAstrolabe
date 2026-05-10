@@ -18,9 +18,14 @@ import { homedir } from "node:os";
 	import { hexEncode } from "glon/crypto.js";
 	import { type CoinState, buildCoinState, BUCKET_TYPE_KEY } from "./coins.js";
 
-const GLON_ROOT = process.env.GLON_DATA ?? join(homedir(), ".glon");
-const CHANGES_DIR = join(GLON_ROOT, "changes");
+	// Hard-coded token metadata for tokens that exist only in program
+	// constants (e.g. FIGGIES reward token) and have no on-disk object.
+	const KNOWN_TOKENS: Record<string, { name: string; symbol: string }> = {
+		b1aa1f2da78048a6a2051db9: { name: "Figgies", symbol: "FIGGIES" },
+	};
 
+	const GLON_ROOT = process.env.GLON_DATA ?? join(homedir(), ".glon");
+	const CHANGES_DIR = join(GLON_ROOT, "changes");
 	// ── Wallet pubkeys (read-only cache) ─────────────────────────────
 
 	let walletPubkeys: Set<string> | null = null;
@@ -996,6 +1001,15 @@ export function search(query: string, limit: number = 20): SearchResults {
 					enriched.tokenName = tokenPo.object.name;
 					const sym = extractString(tokenPo.state.fields.get("symbol"));
 					if (sym) enriched.tokenSymbol = sym;
+				}
+				// Fallback for tokens that exist only in program constants
+				// (e.g. FIGGIES reward token) and have no on-disk object.
+				if (!enriched.tokenName) {
+					const known = KNOWN_TOKENS[enriched.tokenId];
+					if (known) {
+						enriched.tokenName = known.name;
+						enriched.tokenSymbol = known.symbol;
+					}
 				}
 			}
 			buckets.push({ ...po.object, coinState: enriched });
