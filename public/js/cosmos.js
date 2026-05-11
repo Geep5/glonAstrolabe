@@ -355,7 +355,19 @@ export function buildCosmos(state, materials) {
 		bucket.push(childId);
 		orbitChildren.set(parentId, bucket);
 	}
-	for (const bucket of orbitChildren.values()) bucket.sort();
+	// Sort siblings newest → oldest so the index-0 satellite sits at XII
+	// (the noon wall, our "spawn line") and each subsequent index drifts
+	// clockwise into the past. Tie-break by id for stability across reloads.
+	const createdAtOf = new Map();
+	for (const obj of state.objects) {
+		createdAtOf.set(obj.id, typeof obj.createdAt === "number" ? obj.createdAt : 0);
+	}
+	for (const bucket of orbitChildren.values()) {
+		bucket.sort((a, b) => {
+			const dt = (createdAtOf.get(b) ?? 0) - (createdAtOf.get(a) ?? 0);
+			return dt !== 0 ? dt : (a < b ? -1 : 1);
+		});
+	}
 	const spawnDepthOf = (obj) => Number(obj.scalars?.spawn_depth ?? 0);
 
 	// ── Crypto value scaling ───────────────────────────────────────
@@ -422,9 +434,27 @@ export function buildCosmos(state, materials) {
 		// Deterministic ordering. Agents are sorted by spawn_depth first so
 		// every primary lands before its subagents \u2014 the subagent placement
 		// reads positions.get(parent) and would otherwise miss the parent.
+		// For agents we MUST sort by spawn_depth first so primaries are placed
+		// before subagents try to look them up. For every other type we sort
+		// by `updatedAt` desc — "most recently touched" lands at XII (the
+		// noon wall) and stale entries drift clockwise into the past.
 		const sorted = isAgentType
 			? [...list].sort((a, b) => spawnDepthOf(a) - spawnDepthOf(b) || a.id.localeCompare(b.id))
-			: [...list].sort((a, b) => a.id.localeCompare(b.id));
+			: [...list].sort((a, b) => {
+				const dt = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+				return dt !== 0 ? dt : a.id.localeCompare(b.id);
+			});
+
+		// Precompute newest/oldest updatedAt across primaries (unparented
+		// nodes of this type), so each primary's outer-ring angle can be
+		// proportional to its actual time gap from the newest. Linear time:
+		// a freshly-modified node sits next to the hand; a much older one
+		// sits closer to the far side of the dial. Bunches of similarly-aged
+		// items cluster; long gaps leave visible empty arcs.
+		const primariesByType = sorted.filter((o) => !orbitParentOf.has(o.id));
+		const ringTNewest = primariesByType.length > 0 ? (primariesByType[0].updatedAt ?? 0) : 0;
+		const ringTOldest = primariesByType.length > 0 ? (primariesByType[primariesByType.length - 1].updatedAt ?? 0) : 0;
+		const ringTSpan = ringTNewest - ringTOldest;
 		const floatScale = radius < 1 ? 0.4 : 1.0; // central anchor drifts less
 
 		// Pre-compute primary-agent count + index for ring-distribution when
@@ -455,7 +485,25 @@ export function buildCosmos(state, materials) {
 					parentHaloR + 1.5 + (depth - 1) * 1.5,
 					sCount * 0.45,
 				);
-				const theta = angleFor(sIdx, sCount, "sub" + parentId);
+				// XII (the noon wall) lives at world −Z, theta = −π/2.
+				// Angle is proportional to actual time gap from the newest
+				// sibling: a freshly-spawned subagent sits just clockwise of
+				// the hand, an old one sits just counter-clockwise. Tight
+				// bunches of co-spawned siblings cluster together; long
+				// dormant gaps leave visible empty arcs.
+				const XII_GAP = Math.PI / 24; // ~7.5° clearance each side
+				let theta;
+				if (sCount <= 1) {
+					theta = -Math.PI / 2 + XII_GAP;
+				} else {
+					// siblings is sorted desc by createdAt, so [0] is newest, [-1] oldest.
+					const tNewest = createdAtOf.get(siblings[0]) ?? 0;
+					const tOldest = createdAtOf.get(siblings[siblings.length - 1]) ?? 0;
+					const tSpan = tNewest - tOldest;
+					const tThis = createdAtOf.get(obj.id) ?? 0;
+					const ageFraction = tSpan > 0 ? (tNewest - tThis) / tSpan : (sIdx / (sCount - 1));
+					theta = -Math.PI / 2 + XII_GAP + ageFraction * (Math.PI * 2 - 2 * XII_GAP);
+				}
 				pos = new THREE.Vector3(
 					parentPos.x + Math.cos(theta) * orbitR,
 					parentPos.y + jitterY(obj.id) * 0.4,
@@ -477,7 +525,28 @@ export function buildCosmos(state, materials) {
 			const ringRadius = typeKey === "agent" && primaryCount > 1
 				? 2
 				: Math.max(radius, ringCount * 0.35);
-				const theta0 = angleFor(primaryIdx, ringCount, typeKey);
+				// Non-agent outer rings: angle is proportional to actual
+				// time gap from the most-recently-updated primary in this
+				// type's ring. Recently-touched things bunch near the hand;
+				// stale entries spread out and dormant periods leave gaps.
+				// Agents keep the hash-phase from angleFor() since their
+				// multi-primary case is a tiny inner ring where temporal
+				// ordering is moot.
+				const XII_GAP_RING = Math.PI / 24;
+				let theta0;
+				if (isAgentType) {
+					theta0 = angleFor(primaryIdx, ringCount, typeKey);
+				} else if (ringCount <= 1 || ringTSpan <= 0) {
+					// Fallback to even spacing when time info is degenerate
+					// (single item, or every primary shares one updatedAt).
+					theta0 = ringCount <= 1
+						? -Math.PI / 2 + XII_GAP_RING
+						: -Math.PI / 2 + XII_GAP_RING + (primaryIdx / (ringCount - 1)) * (Math.PI * 2 - 2 * XII_GAP_RING);
+				} else {
+					const tThis = obj.updatedAt ?? 0;
+					const ageFraction = (ringTNewest - tThis) / ringTSpan;
+					theta0 = -Math.PI / 2 + XII_GAP_RING + ageFraction * (Math.PI * 2 - 2 * XII_GAP_RING);
+				}
 				const yJitter = jitterY(obj.id);
 				const baseY = y + yJitter;
 				pos = new THREE.Vector3(
@@ -587,7 +656,11 @@ export function buildCosmos(state, materials) {
 				orbitYOffset,
 				orbitRadius,
 				orbitAngle,
-				orbitSpeed: typeKey === "chain.anchor" ? 0 : 0.025,
+				// Orbital sweep is intentionally zero — angular position around
+				// the parent is reserved for a temporal encoding (e.g. eldest
+				// sibling at XII). Per-axis sin-wave drift (floatAmp/floatFreq
+				// applied in tick()) still gives the scene a "living" feel.
+				orbitSpeed: 0,
 				parentId,
 			});
 		}

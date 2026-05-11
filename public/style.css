@@ -38,38 +38,6 @@ html, body {
 	z-index: 0;
 }
 
-	/* HUD reference grid — fixed screen-space cells the user can name
-	   while orbiting ("the ball in C2"). Sits behind the WebGL canvas so
-	   planets render on top; still visible because canvas is transparent. */
-	#grid-overlay {
-		position: fixed;
-		inset: 0;
-		display: grid;
-		pointer-events: none;
-		z-index: -1;
-	/* Cell count comes from main.js via custom properties so the labels
-	   and CSS layout stay in sync from a single source of truth. */
-	grid-template-columns: repeat(var(--grid-cols, 8), 1fr);
-	grid-template-rows: repeat(var(--grid-rows, 4), 1fr);
-}
-	#grid-overlay .grid-cell {
-		position: relative;
-		border-right: 1px solid rgba(0, 255, 200, 0.22);
-		border-bottom: 1px solid rgba(0, 255, 200, 0.22);
-		box-shadow: inset 0 0 12px rgba(0, 255, 200, 0.03);
-	}
-	#grid-overlay .grid-cell.col-last  { border-right: none; }
-	#grid-overlay .grid-cell.row-last  { border-bottom: none; }
-	#grid-overlay .grid-cell .grid-label {
-		position: absolute;
-		top: 4px;
-		left: 6px;
-		font: 10px/1 ui-monospace, "SF Mono", Menlo, monospace;
-		letter-spacing: 1px;
-		color: rgba(0, 255, 200, 0.55);
-		text-shadow: 0 0 6px rgba(0, 255, 200, 0.45);
-		user-select: none;
-	}
 
 kbd {
 	display: inline-block;
@@ -187,6 +155,39 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	display: flex;
 	align-items: center;
 	gap: 8px;
+}
+
+/* Mining toggle pill in the topbar. Two visual states distinguish ON
+   (subtle teal glow, the system is actively minting FIG) from OFF
+   (dim, neutral, the tick is paused). */
+.mining-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 10px;
+	border-radius: 999px;
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--text-dim, #9aa0a6);
+	font: 11px/1 ui-monospace, "SF Mono", monospace;
+	letter-spacing: 0.02em;
+	cursor: pointer;
+	transition: background 0.15s, border-color 0.15s, color 0.15s;
+	user-select: none;
+}
+.mining-toggle:hover { background: rgba(255, 255, 255, 0.08); }
+.mining-toggle:focus-visible { outline: 2px solid rgba(94, 234, 212, 0.5); outline-offset: 1px; }
+.mining-toggle:disabled { opacity: 0.5; cursor: progress; }
+.mining-toggle .mining-icon { font-size: 12px; opacity: 0.75; }
+.mining-toggle[data-enabled="on"] {
+	color: #5eead4;
+	border-color: rgba(94, 234, 212, 0.45);
+	background: rgba(94, 234, 212, 0.06);
+}
+.mining-toggle[data-enabled="on"] .mining-icon { opacity: 1; }
+.mining-toggle[data-enabled="off"] {
+	color: rgba(255, 255, 255, 0.45);
+	border-color: rgba(255, 255, 255, 0.1);
 }
 
 /* ── Legend ───────────────────────────────────────────────────── */
@@ -336,15 +337,6 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	color: var(--text-muted);
 	}
 	.inspector-empty .stats b { color: var(--text); font-weight: 500; }
-	#inspector-preview {
-		width: 100%;
-		height: 180px;
-		border-radius: 8px;
-		background: #0a0a12;
-		border: 1px solid var(--stroke);
-		display: block;
-		margin-bottom: 10px;
-	}
 
 	.type-badge {
 		display: inline-block;
@@ -920,6 +912,47 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	box-shadow: var(--shadow);
 	z-index: 10;
 }
+
+#network {
+	position: fixed;
+	right: 612px;
+	top: 14px;
+	width: 260px;
+	max-height: calc(100vh - 28px);
+	overflow-y: auto;
+	background: var(--bg-panel);
+	backdrop-filter: blur(12px) saturate(1.2);
+	border: 1px solid var(--stroke);
+	border-radius: var(--radius);
+	padding: 10px 14px;
+	box-shadow: var(--shadow);
+	z-index: 10;
+}
+.network-list { list-style: none; margin: 0; padding: 0; }
+.network-row { display: grid; grid-template-columns: 8px 1fr auto; gap: 6px; align-items: center; padding: 4px 6px; border-radius: 4px; }
+.network-row:hover { background: rgba(255,255,255,0.04); }
+.network-dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
+.network-row.trusted .network-dot { background: #5eead4; box-shadow: 0 0 6px rgba(94,234,212,.6); }
+.network-row.discovered .network-dot { background: #ffc857; }
+.network-name { color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.network-action {
+	font: 10px/1 ui-monospace, "SF Mono", monospace;
+	padding: 3px 8px;
+	border-radius: 999px;
+	border: 1px solid rgba(94,234,212,.45);
+	background: rgba(94,234,212,.06);
+	color: #5eead4;
+	cursor: pointer;
+}
+.network-action:hover { background: rgba(94,234,212,.16); }
+.network-action:disabled { opacity: 0.4; cursor: progress; }
+.network-action.muted { border-color: rgba(255,255,255,.1); color: var(--text-muted); background: transparent; }
+.network-requests { margin: 4px 0 8px; padding: 8px; border-radius: 6px; background: rgba(255, 200, 87, 0.07); border: 1px solid rgba(255, 200, 87, 0.25); }
+.network-requests:empty { display: none; }
+.network-request { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; padding: 3px 0; font-size: 11px; }
+.network-request .network-action.decline { color: #f87171; border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.06); }
+.network-request .network-action.decline:hover { background: rgba(248,113,113,.18); }
+.network-footer { margin-top: 8px; font-size: 10px; color: var(--text-muted); }
 .coins-list { list-style: none; margin: 0; padding: 0; }
 .coins-row {
 	display: grid;

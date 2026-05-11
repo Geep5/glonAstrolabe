@@ -22,6 +22,8 @@ import { colorForType } from "./colors.js";
 
 import { showPaymentModal } from "./payment-modal.js";
 	import { openAgentChat, initAgentChats } from "./chat.js";
+	import { initMiningToggle } from "./mining-toggle.js";
+	import { initNetworkPanel } from "./network-panel.js";
 	import { getRender, setRender, clearRender, applyToMesh, updateOverlays } from "./planet-styles.js";
 	import { initPhysics } from "./physics.js";
 
@@ -35,9 +37,6 @@ let snapshot = null;
 	let hoverId = null;
 	let labelCanvas, labelCtx;
 	let timeFilter = null;      // ms upper bound, or null for live
-	// Inspector preview: close-up render of selected node
-	let previewRenderer, previewScene, previewCamera, previewMesh, previewLight;
-	let previewRotation = 0;
 // Watched agent for in-context highlighting; picked by activity at init.
 let contextAgentId = null;
 
@@ -51,9 +50,6 @@ let contextAgentId = null;
 	let lastMX = 0, lastMY = 0;
 	const MOUSELOOK_SENS = 0.003;
 
-	// HUD grid dimensions (must match setupHudGrid call)
-	const GRID_COLS = 8;
-	const GRID_ROWS = 4;
 
 	// Shared reusable geometries + materials.
 const materials = {
@@ -81,8 +77,9 @@ const materials = {
 		agents.sort((a, b) => (b.agentStats?.lastActivity ?? 0) - (a.agentStats?.lastActivity ?? 0));
 		contextAgentId = agents[0]?.id ?? null;
 		initAgentChats(agents);
+		initMiningToggle();
+		initNetworkPanel();
 		setupThree();
-		setupHudGrid(8, 4);
 		buildScenes();
 		bindUI();
 		setupLiveLog({
@@ -164,9 +161,9 @@ function setupThree() {
 	controls.maxDistance = 100;
 	controls.addEventListener("start", () => { followId = null; });
 
-	// (Spatial reference is provided by a screen-space HUD grid in
-	// public/index.html, not a 3D helper \u2014 the HUD stays put while the
-	// camera orbits, so "section A1" always means the same screen region.
+	// Spatial reference is the world-anchored clock face (see
+	// buildSceneClock) \u2014 12 o'clock is fixed at world -Z so a node's
+	// position relative to the dial means the same thing from any angle.
 
 	// Lighting model: Graice IS the sun. A single bright PointLight sits
 	// where the agent ball lives (origin) and lights every other ball from
@@ -198,34 +195,6 @@ function setupThree() {
 		0.55,   // radius    (was 0.7)
 	);
 	composer.addPass(bloom);
-
-	// ── Inspector preview renderer ──────────────────────────────────
-	const previewCanvas = document.getElementById("inspector-preview");
-	if (previewCanvas) {
-		previewRenderer = new THREE.WebGLRenderer({ canvas: previewCanvas, antialias: true, alpha: false });
-		previewRenderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
-		previewRenderer.setSize(324, 180);
-		previewRenderer.setClearColor(0x0a0a12, 1);
-		previewRenderer.toneMapping = THREE.ACESFilmicToneMapping;
-		previewRenderer.toneMappingExposure = 1.15;
-		previewRenderer.outputColorSpace = THREE.SRGBColorSpace;
-
-		previewScene = new THREE.Scene();
-		// Brighter ambient + multi-point lighting so even dark Lambert nodes read clearly
-		previewScene.add(new THREE.AmbientLight(0x606080, 0.7));
-		previewLight = new THREE.PointLight(0xfff0d0, 1.8, 30, 1.0);
-		previewLight.position.set(3, 4, 5);
-		previewScene.add(previewLight);
-		const fillLight = new THREE.PointLight(0xd0e0ff, 0.8, 20, 1.2);
-		fillLight.position.set(-4, 1, -3);
-		previewScene.add(fillLight);
-		const rimLight = new THREE.DirectionalLight(0xffffff, 0.6);
-		rimLight.position.set(0, 2, -5);
-		previewScene.add(rimLight);
-
-		previewCamera = new THREE.PerspectiveCamera(40, 324 / 180, 0.1, 50);
-		previewCamera.position.set(0, 0, 4);
-	}
 
 	window.addEventListener("resize", onResize);
 
@@ -312,11 +281,12 @@ function setupThree() {
 		cosmosCtx = buildCosmos(snapshot, materials);
 		scene.add(cosmosCtx.group);
 
-		// Neon reference grid + upward ambient fill
+		// World-anchored clock face is the scene's sole spatial reference.
+		// 12 o'clock points to world -Z; hours advance clockwise viewed
+		// from above. As the camera orbits, the clock stays in world space
+		// — so a node "at 12 o'clock" really is the one closest to -Z.
 		const gridY = -12;
-		const grid = new THREE.GridHelper(200, 100, 0x5eead4, 0x0d2b28);
-		grid.position.y = gridY;
-		scene.add(grid);
+		buildSceneClock(scene, { y: gridY, radius: 80 });
 
 		// Upward-pointing neon lights to brighten the dark void
 		const gridLight = new THREE.PointLight(0x5eead4, 1.8, 160, 1.3);
@@ -1090,41 +1060,9 @@ function onDoubleClick(e) {
 		selectedId = id;
 		showObject(id);
 		highlightSelected();
-		updatePreview();
 		if (focus) focusOnId(id);
 	}
 
-	// ── Inspector preview ────────────────────────────────────────────
-	function updatePreview() {
-		if (!previewScene || !previewRenderer) return;
-		// Remove old preview mesh
-		if (previewMesh) {
-			previewScene.remove(previewMesh);
-			if (previewMesh.geometry) previewMesh.geometry.dispose();
-			// NOTE: do NOT dispose material.map — textures are shared across clones.
-			// Only dispose geometry to avoid leaks.
-			previewMesh = null;
-		}
-		if (!selectedId || !cosmosCtx?.nodes?.has(selectedId)) {
-			previewRenderer.clear();
-			return;
-		}
-		const node = cosmosCtx.nodes.get(selectedId);
-		if (!node?.mesh) return;
-		// Deep-clone the mesh for the preview scene
-		previewMesh = node.mesh.clone(true);
-		previewMesh.position.set(0, 0, 0);
-		previewMesh.rotation.set(0, 0, 0);
-		// Normalize scale so even tiny anchors fill the viewport
-		const targetSize = 1.6;
-		const bbox = new THREE.Box3().setFromObject(previewMesh);
-		const size = bbox.getSize(new THREE.Vector3());
-		const maxDim = Math.max(size.x, size.y, size.z);
-		const scale = maxDim > 0 ? targetSize / maxDim : 1;
-		previewMesh.scale.setScalar(scale);
-		previewScene.add(previewMesh);
-		previewRotation = 0;
-	}
 	function focusOnId(id) {
 		const node = cosmosCtx.nodes.get(id);
 		if (!node) return;
@@ -1484,15 +1422,6 @@ function animate() {
 	}
 	composer.render();
 
-	// Inspector preview: slowly rotate the selected node
-	if (previewRenderer && previewScene && previewCamera) {
-		if (previewMesh) {
-			previewRotation += dt * 0.4;
-			previewMesh.rotation.y = previewRotation;
-		}
-		previewRenderer.render(previewScene, previewCamera);
-	}
-
 	drawLabels();
 
 	frameCount++;
@@ -1549,38 +1478,82 @@ function animate() {
 // e.g. `A1` is top-left, `H4` is bottom-right at 8\u00d74. CSS handles the
 // layout via custom properties so this stays the only source of truth
 // for the cell count.
-function setupHudGrid(cols, rows) {
-	const host = document.getElementById("grid-overlay");
-	if (!host) return;
-	host.style.setProperty("--grid-cols", String(cols));
-	host.style.setProperty("--grid-rows", String(rows));
-	host.replaceChildren();
-	for (let r = 0; r < rows; r++) {
-		for (let c = 0; c < cols; c++) {
-			const cell = document.createElement("div");
-			cell.className = "grid-cell";
-			if (c === cols - 1) cell.classList.add("col-last");
-			if (r === rows - 1) cell.classList.add("row-last");
-			const label = document.createElement("span");
-			label.className = "grid-label";
-			label.textContent = `${columnLabel(c)}${r + 1}`;
-			cell.appendChild(label);
-			host.appendChild(cell);
-		}
-	}
+
+// \u2500\u2500 World-anchored clock face \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+//
+// Adds a teal ring + a single radial "spawn hand" lying flat on the
+// floor. The hand marks the angular origin (world -Z); siblings are
+// sorted temporally around it (newest just clockwise of the hand,
+// oldest just counter-clockwise — see cosmos.js XII_GAP). Hour ticks
+// and Roman labels were removed; the hand alone communicates "this
+// is where things begin / appear / are read from".
+//
+//   12 o'clock \u21d2 world -Z
+//    3 o'clock \u21d2 world +X
+//    6 o'clock \u21d2 world +Z
+//    9 o'clock \u21d2 world -X
+//
+// Hours advance clockwise viewed from above (camera default is +Y looking
+// down/toward origin).
+function buildSceneClock(scene, opts = {}) {
+	const THREE_ = (typeof THREE !== "undefined") ? THREE : globalThis.THREE;
+	const y = opts.y ?? -11.95;
+	const radius = opts.radius ?? 80;
+	const color = opts.color ?? 0x5eead4;
+	const group = new THREE_.Group();
+	group.position.y = y;
+
+	// Outer ring (thin annulus that sits flat).
+	const ringInner = radius - 0.35;
+	const ringOuter = radius + 0.35;
+	const ringGeom = new THREE_.RingGeometry(ringInner, ringOuter, 192);
+	const ringMat = new THREE_.MeshBasicMaterial({
+		color,
+		transparent: true,
+		opacity: 0.45,
+		side: THREE_.DoubleSide,
+		depthWrite: false,
+	});
+	const ring = new THREE_.Mesh(ringGeom, ringMat);
+	ring.rotation.x = -Math.PI / 2;
+	group.add(ring);
+
+	// Noon hand: a thin flat rectangle lying on the floor from origin
+	// out to the XII tick. Marks the spawn line without intruding into
+	// the node volume above.
+	const handLen = radius - 0.5;
+	const handMat = new THREE_.MeshBasicMaterial({
+		color,
+		transparent: true,
+		opacity: 0.8,
+		side: THREE_.DoubleSide,
+		depthWrite: false,
+	});
+	const handGeom = new THREE_.PlaneGeometry(0.9, handLen);
+	const hand = new THREE_.Mesh(handGeom, handMat);
+	hand.rotation.x = -Math.PI / 2;
+	hand.position.set(0, 0.01, -handLen / 2);
+	group.add(hand);
+
+	// Center cap so the wall visually anchors at the origin.
+	const capGeom = new THREE_.CircleGeometry(1.8, 32);
+	const capMat = new THREE_.MeshBasicMaterial({
+		color,
+		transparent: true,
+		opacity: 0.9,
+		side: THREE_.DoubleSide,
+		depthWrite: false,
+	});
+	const cap = new THREE_.Mesh(capGeom, capMat);
+	cap.rotation.x = -Math.PI / 2;
+	cap.position.y = 0.02;
+	group.add(cap);
+
+
+	scene.add(group);
+	return group;
 }
 
-// Spreadsheet-style column label: 0\u2192A, 25\u2192Z, 26\u2192AA, 27\u2192AB.
-function columnLabel(idx) {
-	let s = "";
-	let n = idx;
-	for (;;) {
-		s = String.fromCharCode(65 + (n % 26)) + s;
-		n = Math.floor(n / 26) - 1;
-		if (n < 0) break;
-	}
-	return s;
-}
 
 // \u2500\u2500 Draggable panels \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 

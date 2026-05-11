@@ -21,7 +21,6 @@
 <body>
 	<canvas id="scene"></canvas>
 	<div id="search-results" class="search-results" hidden></div>
-	<div id="grid-overlay" aria-hidden="true"></div>
 
 	<header id="top">
 		<div class="brand">
@@ -31,6 +30,10 @@
 			<span id="root-path" class="root">loading…</span>
 		</div>
 		<div class="top-right">
+			<button id="mining-toggle" class="mining-toggle" type="button" title="Toggle FIG anchor mining (60s tick)" hidden>
+				<span class="mining-icon">⛏</span>
+				<span class="mining-label">mining…</span>
+			</button>
 			<input id="search" type="search" placeholder="search id / type / name…" />
 		</div>
 	</header>
@@ -77,6 +80,14 @@
 		<ul id="crypto-list" class="coins-list"></ul>
 	</aside>
 
+	<aside id="network">
+		<button class="panel-collapse" data-panel="network" title="Collapse">─</button>
+		<h3>Network <span id="network-count" class="count"></span></h3>
+		<div id="network-requests" class="network-requests" hidden></div>
+		<ul id="network-list" class="network-list"></ul>
+		<div class="network-footer muted small" id="network-status"></div>
+	</aside>
+
 	<aside id="inspector">
 		<button class="panel-collapse" data-panel="inspector" title="Collapse">─</button>
 		<div class="inspector-collapsed-summary" id="inspector-summary">
@@ -89,7 +100,6 @@
 			<div class="stats" id="stats"></div>
 		</div>
 		<div id="inspector-content" hidden>
-			<canvas id="inspector-preview" width="324" height="180"></canvas>
 			<div class="type-badge" id="insp-type"></div>
 			<h2 id="insp-title"></h2>
 			<div id="insp-subtitle" class="muted"></div>

@@ -1,0 +1,138 @@
+// Network panel — Hyperswarm-discovered peers + peer-request approvals.
+//
+// Polls /api/network/{status,peers,requests} every NETWORK_POLL_MS,
+// renders to #network-list and #network-requests, wires "Peer with",
+// "Accept", and "Decline" buttons to the matching POST endpoints.
+
+const POLL_MS = 5_000;
+const NETWORK_LIST = document.getElementById("network-list");
+const NETWORK_REQUESTS = document.getElementById("network-requests");
+const NETWORK_COUNT = document.getElementById("network-count");
+const NETWORK_STATUS = document.getElementById("network-status");
+
+let lastRender = "";
+
+function shortKey(key) {
+	if (!key || typeof key !== "string") return "";
+	return key.length > 16 ? key.slice(0, 12) + "…" : key;
+}
+
+function trustClass(level) {
+	if (level === "trusted") return "trusted";
+	if (level === "discovered") return "discovered";
+	return "";
+}
+
+async function postAction(url, body) {
+	const opts = { method: "POST", headers: { "Content-Type": "application/json" } };
+	if (body !== undefined) opts.body = JSON.stringify(body);
+	const res = await fetch(url, opts);
+	const json = await res.json().catch(() => null);
+	if (!res.ok || json?.ok === false) {
+		throw new Error(json?.error ?? `HTTP ${res.status}`);
+	}
+	return json;
+}
+
+async function refresh() {
+	let status = null;
+	let peers = [];
+	let requests = [];
+	let unreachable = false;
+	try {
+		const [s, p, r] = await Promise.all([
+			fetch("/api/network/status").then((res) => res.json()),
+			fetch("/api/network/peers").then((res) => res.json()),
+			fetch("/api/network/requests").then((res) => res.json()),
+		]);
+		status = s?.status ?? null;
+		peers = Array.isArray(p?.peers) ? p.peers : [];
+		requests = Array.isArray(r?.requests) ? r.requests : [];
+	} catch {
+		unreachable = true;
+	}
+
+	// Pending incoming requests get a yellow inline strip above the peer list.
+	const pendingIncoming = requests.filter((q) => q.direction === "incoming" && q.status === "waiting");
+	const reqHtml = pendingIncoming.map((q) => {
+		const id = q.request_id;
+		const name = (q.peer_agent_name || "(unnamed)").replace(/[<>&]/g, "");
+		return `<div class="network-request">
+			<span><strong>${name}</strong> wants to peer</span>
+			<button class="network-action" data-action="accept" data-id="${id}">accept</button>
+			<button class="network-action decline" data-action="decline" data-id="${id}">decline</button>
+		</div>`;
+	}).join("");
+	NETWORK_REQUESTS.innerHTML = reqHtml;
+
+	// Peers, sorted: trusted first, then discovered, then by recency.
+	peers.sort((a, b) => {
+		const tA = (a.peer_object_id ? 1 : 0) + (a.identity_pubkey ? 0 : 0); // crude
+		const tB = (b.peer_object_id ? 1 : 0) + (b.identity_pubkey ? 0 : 0);
+		if (tA !== tB) return tB - tA;
+		return (b.last_seen ?? 0) - (a.last_seen ?? 0);
+	});
+
+	const rows = peers.map((p) => {
+		// Trust derives from whether the peer is in our /peer book; v1
+		// surfaces what the directory snapshot reports.
+		const trustLevel = p.peer_object_id ? "trusted" : "discovered";
+		const name = (p.agent_name || "(unnamed)").replace(/[<>&]/g, "");
+		const id = shortKey(p.identity_pubkey || p.hyperswarm_pubkey);
+		const action = trustLevel === "trusted"
+			? `<button class="network-action muted" disabled>peered</button>`
+			: `<button class="network-action" data-action="peer" data-hyperswarm="${p.hyperswarm_pubkey}" data-identity="${p.identity_pubkey ?? ""}">peer with</button>`;
+		return `<li class="network-row ${trustClass(trustLevel)}">
+			<span class="network-dot"></span>
+			<span class="network-name" title="${id}">${name}</span>
+			${action}
+		</li>`;
+	}).join("");
+	NETWORK_LIST.innerHTML = rows;
+	NETWORK_COUNT.textContent = peers.length ? String(peers.length) : "";
+
+	if (unreachable) {
+		NETWORK_STATUS.textContent = "swarm offline (start daemon with GLON_SWARM=1)";
+	} else if (status?.hyperswarm_pubkey) {
+		NETWORK_STATUS.textContent = `${status.peers_connected ?? 0} connected · my pubkey ${shortKey(status.hyperswarm_pubkey)}`;
+	} else {
+		NETWORK_STATUS.textContent = "";
+	}
+
+	// Hash-based change check avoids unnecessary DOM churn.
+	const sig = NETWORK_LIST.innerHTML + "|" + NETWORK_REQUESTS.innerHTML;
+	if (sig !== lastRender) lastRender = sig;
+}
+
+function bindClicks() {
+	const handler = async (e) => {
+		const btn = e.target.closest("button.network-action");
+		if (!btn || btn.disabled) return;
+		const action = btn.dataset.action;
+		btn.disabled = true;
+		try {
+			if (action === "peer") {
+				await postAction("/api/network/peer", { hyperswarm_pubkey: btn.dataset.hyperswarm, identity_pubkey: btn.dataset.identity });
+				setTimeout(refresh, 250);
+			} else if (action === "accept") {
+				await postAction(`/api/network/requests/${encodeURIComponent(btn.dataset.id)}/accept`);
+				setTimeout(refresh, 250);
+			} else if (action === "decline") {
+				await postAction(`/api/network/requests/${encodeURIComponent(btn.dataset.id)}/decline`);
+				setTimeout(refresh, 250);
+			}
+		} catch (err) {
+			console.warn("[network] action failed:", err?.message ?? err);
+			btn.disabled = false;
+		}
+	};
+	NETWORK_LIST.addEventListener("click", handler);
+	NETWORK_REQUESTS.addEventListener("click", handler);
+}
+
+export function initNetworkPanel() {
+	if (!NETWORK_LIST) return;
+	bindClicks();
+	refresh();
+	setInterval(refresh, POLL_MS);
+}

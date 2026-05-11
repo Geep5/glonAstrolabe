@@ -6,23 +6,37 @@
  * a parallel implementation.
  */
 
-const DAEMON_PORT = Number(process.env.GLON_DAEMON_PORT ?? 6420);
-const DAEMON_BASE = `http://127.0.0.1:${DAEMON_PORT}`;
-export const DAEMON_URL = `${DAEMON_BASE}/dispatch`;
+// Two ports involved:
+//   - HOST_PORT (default 6420) — the RivetKit actor host (started by
+//     `npm run dev` in glon). storeActor lives here; we still use it for
+//     read-only program discovery.
+//   - DISPATCH_PORT (default 6430) — the daemon's local HTTP dispatch
+//     endpoint (scripts/daemon.ts). Program actor instances run inside
+//     the daemon process and ARE addressable via this endpoint; they are
+//     NOT registered as RivetKit programActor instances, so going through
+//     the host gateway for actor dispatch silently returns null.
+const HOST_PORT = Number(process.env.GLON_HOST_PORT ?? process.env.GLON_DAEMON_PORT ?? 6420);
+const DISPATCH_PORT = Number(process.env.GLON_DISPATCH_PORT ?? 6430);
+const HOST_BASE = `http://127.0.0.1:${HOST_PORT}`;
+const DISPATCH_BASE = `http://127.0.0.1:${DISPATCH_PORT}`;
+// Exported for compatibility — historically /dispatch on the same port as
+// the actor gateway. Now points at the daemon's HTTP endpoint.
+export const DAEMON_URL = `${DISPATCH_BASE}/dispatch`;
 
 const RIVET_HEADERS = {
 	"x-rivet-target": "actor",
 	"x-rivet-encoding": "json",
 } as const;
 
-	/** Call an actor action through the RivetKit HTTP gateway. */
+	/** Call an actor action through the RivetKit HTTP gateway on the host.
+	 *  Used for read-only storeActor lookups in getPrograms(). */
 	async function actorAction<T = unknown>(
 	actorId: string,
 	actionName: string,
 	args: unknown[],
 ): Promise<T | null> {
 	try {
-		const res = await fetch(`${DAEMON_BASE}/gateway/${encodeURIComponent(actorId)}/action/${encodeURIComponent(actionName)}`, {
+		const res = await fetch(`${HOST_BASE}/gateway/${encodeURIComponent(actorId)}/action/${encodeURIComponent(actionName)}`, {
 			method: "POST",
 			headers: {
 				...RIVET_HEADERS,
@@ -44,7 +58,7 @@ let storeActorId: string | null = null;
 async function getStoreActorId(): Promise<string | null> {
 	if (storeActorId) return storeActorId;
 	try {
-		const res = await fetch(`${DAEMON_BASE}/actors?name=storeActor`);
+		const res = await fetch(`${HOST_BASE}/actors?name=storeActor`);
 		if (!res.ok) return null;
 		const data = (await res.json()) as { actors?: Array<{ actor_id: string }> } | null;
 		const id = data?.actors?.[0]?.actor_id ?? null;
@@ -85,40 +99,41 @@ async function getProgramIdForPrefix(prefix: string): Promise<string | null> {
 	return programPrefixCache?.get(prefix) ?? null;
 }
 
-/** Find a program actor id by its program object id. */
-async function getProgramActorId(programId: string): Promise<string | null> {
-	try {
-		const res = await fetch(`${DAEMON_BASE}/actors?name=programActor`);
-		if (!res.ok) return null;
-		const data = (await res.json()) as { actors?: Array<{ actor_id: string; key: string }> } | null;
-		for (const a of data?.actors ?? []) {
-			if (a.key === programId) return a.actor_id;
-		}
-		return null;
-	} catch {
-		return null;
-	}
-}
-
-/** Dispatch an action to a program via the RivetKit gateway.
- *  Returns null if the daemon is unreachable or the program is not found. */
+/** Dispatch an action to a program through the daemon's HTTP /dispatch
+ *  endpoint. The daemon runs program actor instances locally (they are
+ *  NOT registered with the host's RivetKit programActor pool), so this
+ *  path is the only reliable way to reach them.
+ *
+ *  Throws on transport failure (daemon unreachable) and on `{ok:false}`
+ *  responses from the daemon so callers' `.catch` handlers fire instead
+ *  of silently dropping replies. */
 export async function dispatchToDaemon(
 	prefix: string,
 	action: string,
 	args: unknown[],
-): Promise<unknown | null> {
-	const progId = await getProgramIdForPrefix(prefix);
-	if (!progId) return null;
-	const actorId = await getProgramActorId(progId);
-	if (!actorId) return null;
-
-	const result = await actorAction<string>(actorId, "dispatch", [action, JSON.stringify(args)]);
-	if (result === null) return null;
+): Promise<unknown> {
+	let res: Response;
 	try {
-		return JSON.parse(result);
-	} catch {
-		return result;
+		res = await fetch(`${DISPATCH_BASE}/dispatch`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ prefix, action, args }),
+		});
+	} catch (err: any) {
+		throw new Error(`glon daemon unreachable at ${DISPATCH_BASE}: ${err?.message ?? String(err)}`);
 	}
+	if (!res.ok) {
+		// Try to extract the daemon's structured error.
+		let body: any = null;
+		try { body = await res.json(); } catch { /* non-json */ }
+		const msg = body?.error ?? `HTTP ${res.status} ${res.statusText}`;
+		throw new Error(`daemon dispatch ${prefix} ${action}: ${msg}`);
+	}
+	const body = (await res.json()) as { ok?: boolean; result?: unknown; error?: string };
+	if (body?.ok === false) {
+		throw new Error(`daemon dispatch ${prefix} ${action}: ${body.error ?? "unknown error"}`);
+	}
+	return body?.result;
 }
 
 /** Fetch the list of loaded programs from the daemon. Returns null if offline. */
@@ -144,26 +159,28 @@ export async function getPrograms(): Promise<
 	return programs.length > 0 ? programs : null;
 }
 
-/** Ask an agent a message. Returns the string result or null on failure. */
-export async function askAgent(agentId: string, message: string): Promise<string | null> {
+/** Ask an agent a message. Throws on daemon error so the caller's `.catch`
+ *  can surface the failure (network down, missing credentials, agent
+ *  rejected the prompt, etc.). */
+export async function askAgent(agentId: string, message: string): Promise<string> {
 	const result = await dispatchToDaemon("/agent", "ask", [agentId, message]);
-	if (result === null) return null;
+	if (result === null || result === undefined) return "";
 	if (typeof result === "string") return result;
 	return JSON.stringify(result);
 }
 
-/** Trigger a recall (re-inject a compacted block). Returns the new block id or null. */
-export async function recallBlock(agentId: string, blockId: string): Promise<string | null> {
+/** Trigger a recall (re-inject a compacted block). Throws on daemon error. */
+export async function recallBlock(agentId: string, blockId: string): Promise<string> {
 	const result = await dispatchToDaemon("/agent", "recall", [agentId, blockId]);
-	if (result === null) return null;
+	if (result === null || result === undefined) return "";
 	if (typeof result === "string") return result;
 	return JSON.stringify(result);
 }
 
-/** Trigger an inject (post a user_text describing an object). Returns the new block id or null. */
-export async function injectObject(agentId: string, text: string): Promise<string | null> {
+/** Trigger an inject (post a user_text describing an object). Throws on daemon error. */
+export async function injectObject(agentId: string, text: string): Promise<string> {
 	const result = await dispatchToDaemon("/agent", "ask", [agentId, text]);
-	if (result === null) return null;
+	if (result === null || result === undefined) return "";
 	if (typeof result === "string") return result;
 	return JSON.stringify(result);
 }

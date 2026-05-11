@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { snapshot, getObjectDetail, getObjectChanges, getAgentConversation, getAgentContextRefs, getRoot, search, getWalletPubkeys } from "./reader.js";
 	import { getCoinOverview } from "./reader.js";
 	import { getGlobalCoinStatsViaDaemon } from "./coins.js";
-	import { getPrograms, DAEMON_URL, askAgent, recallBlock, injectObject } from "./daemon-client.js";
+	import { getPrograms, DAEMON_URL, askAgent, recallBlock, injectObject, dispatchToDaemon } from "./daemon-client.js";
 	import { startWatcher, streamEvents, recentEvents } from "./events.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -85,6 +85,103 @@ app.get("/api/agents/:id/context", (req, res) => {
 		});
 		res.json({ ok: true, agentId: id, status: "accepted" });
 	});
+// ── Anchor mining toggle ─────────────────────────────────────────
+//
+// FIG mining is a 60s background tick declared by /anchor. It runs
+// automatically once the program is loaded — there's no other opt-in
+// gate — and shows up as the noisy chain.anchor events in the live log.
+// These endpoints expose the runtime-toggleable on/off field stored on
+// the /anchor program object so the dashboard can pause/resume it
+// without restarting the daemon.
+
+app.get("/api/anchor/status", async (_req, res) => {
+	try {
+		const status = await dispatchToDaemon("/anchor", "getStatus", []);
+		res.json({ ok: true, status });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/anchor/enabled", async (req, res) => {
+	const enabled = !!req.body?.enabled;
+	try {
+		const result = await dispatchToDaemon("/anchor", "setEnabled", [{ enabled }]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+// ── Network panel: peers discovered through the Hyperswarm directory ──
+//
+// Mirrors the /directory program's actions. The UI calls these to render
+// the network panel, surface peer-request prompts, and send accept/decline.
+
+app.get("/api/network/status", async (_req, res) => {
+	try {
+		const status = await dispatchToDaemon("/directory", "status", []);
+		res.json({ ok: true, status });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.get("/api/network/peers", async (_req, res) => {
+	try {
+		const peers = await dispatchToDaemon("/directory", "listDiscovered", []);
+		res.json({ ok: true, peers });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.get("/api/network/requests", async (_req, res) => {
+	try {
+		const requests = await dispatchToDaemon("/directory", "listRequests", []);
+		res.json({ ok: true, requests });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/network/peer", async (req, res) => {
+	// Body: { hyperswarm_pubkey?: string, identity_pubkey?: string, message?: string }
+	try {
+		const result = await dispatchToDaemon("/directory", "requestPeering", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/network/requests/:id/accept", async (req, res) => {
+	try {
+		const result = await dispatchToDaemon("/directory", "acceptRequest", [{ request_id: req.params.id }]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/network/requests/:id/decline", async (req, res) => {
+	try {
+		const result = await dispatchToDaemon("/directory", "declineRequest", [{ request_id: req.params.id }]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/network/announce", async (_req, res) => {
+	try {
+		const result = await dispatchToDaemon("/directory", "announce", []);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
 // Inject an object into an agent's context: post a user_text via /agent ask
 // describing the object. Triggers one assistant turn but the reference stays
 // in context for every subsequent turn until the next compaction.
