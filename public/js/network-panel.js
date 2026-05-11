@@ -73,6 +73,21 @@ async function refresh() {
 		return (b.last_seen ?? 0) - (a.last_seen ?? 0);
 	});
 
+	// "You" row pinned at the top so users can see at a glance whether
+	// they're announcing themselves into the directory (i.e. discoverable).
+	const self = status?.self;
+	const selfRow = self?.hyperswarm_pubkey ? (() => {
+		const name = (self.agent_name || "you").replace(/[<>&]/g, "");
+		const id = shortKey(self.identity_pubkey || self.hyperswarm_pubkey);
+		const announcing = !!self.is_announcing;
+		const stateLabel = announcing ? "discoverable" : "(not announcing yet)";
+		return `<li class="network-row self">
+			<span class="network-dot ${announcing ? "live" : ""}"></span>
+			<span class="network-name" title="${id}">${name} <span class="self-tag">you</span></span>
+			<span class="network-action muted" title="hyperswarm pubkey ${id}">${stateLabel}</span>
+		</li>`;
+	})() : "";
+
 	const rows = peers.map((p) => {
 		// Trust derives from whether the peer is in our /peer book; v1
 		// surfaces what the directory snapshot reports.
@@ -88,7 +103,7 @@ async function refresh() {
 			${action}
 		</li>`;
 	}).join("");
-	NETWORK_LIST.innerHTML = rows;
+	NETWORK_LIST.innerHTML = selfRow + rows;
 	NETWORK_COUNT.textContent = peers.length ? String(peers.length) : "";
 
 	if (unreachable) {
