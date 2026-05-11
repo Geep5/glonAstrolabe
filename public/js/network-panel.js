@@ -88,15 +88,30 @@ async function refresh() {
 		</li>`;
 	})() : "";
 
+	// Build a quick lookup of outgoing-waiting requests keyed by the peer's
+	// hyperswarm pubkey so we can reflect "sent · waiting" on the row
+	// without making it look clickable again.
+	const outgoingPending = new Set(
+		requests
+			.filter((q) => q.direction === "outgoing" && q.status === "waiting")
+			.map((q) => (q.peer_hyperswarm_pubkey || "").toLowerCase())
+	);
+
 	const rows = peers.map((p) => {
 		// Trust derives from whether the peer is in our /peer book; v1
 		// surfaces what the directory snapshot reports.
 		const trustLevel = p.peer_object_id ? "trusted" : "discovered";
 		const name = (p.agent_name || "(unnamed)").replace(/[<>&]/g, "");
 		const id = shortKey(p.identity_pubkey || p.hyperswarm_pubkey);
-		const action = trustLevel === "trusted"
-			? `<button class="network-action muted" disabled>peered</button>`
-			: `<button class="network-action" data-action="peer" data-hyperswarm="${p.hyperswarm_pubkey}" data-identity="${p.identity_pubkey ?? ""}">peer with</button>`;
+		const hpLower = (p.hyperswarm_pubkey || "").toLowerCase();
+		let action;
+		if (trustLevel === "trusted") {
+			action = `<button class="network-action muted" disabled>peered</button>`;
+		} else if (outgoingPending.has(hpLower)) {
+			action = `<button class="network-action muted" disabled>sent · waiting</button>`;
+		} else {
+			action = `<button class="network-action" data-action="peer" data-hyperswarm="${p.hyperswarm_pubkey}" data-identity="${p.identity_pubkey ?? ""}">peer with</button>`;
+		}
 		return `<li class="network-row ${trustClass(trustLevel)}">
 			<span class="network-dot"></span>
 			<span class="network-name" title="${id}">${name}</span>
@@ -127,8 +142,21 @@ function bindClicks() {
 		btn.disabled = true;
 		try {
 			if (action === "peer") {
-				await postAction("/api/network/peer", { hyperswarm_pubkey: btn.dataset.hyperswarm, identity_pubkey: btn.dataset.identity });
-				setTimeout(refresh, 250);
+				const originalLabel = btn.textContent;
+				btn.textContent = "sending…";
+				try {
+					const r = await postAction("/api/network/peer", { hyperswarm_pubkey: btn.dataset.hyperswarm, identity_pubkey: btn.dataset.identity });
+					// Briefly flash "sent ✓" then re-render — the row stays
+					// because trust isn't granted until they accept.
+					btn.textContent = "sent ✓ · waiting";
+					btn.classList.add("muted");
+					console.info("[network] peer-request sent:", r?.result?.request_id);
+					setTimeout(refresh, 1500);
+				} catch (err) {
+					btn.textContent = originalLabel || "peer with";
+					btn.disabled = false;
+					throw err;
+				}
 			} else if (action === "accept") {
 				await postAction(`/api/network/requests/${encodeURIComponent(btn.dataset.id)}/accept`);
 				setTimeout(refresh, 250);
