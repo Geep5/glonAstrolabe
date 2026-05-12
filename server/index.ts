@@ -138,11 +138,19 @@ app.get("/api/network/peers", async (_req, res) => {
 		const peerList = await dispatchToDaemon("/peer", "list", []);
 		const trustMap = new Map();
 		for (const p of peerList || []) {
-			if (p.identity_pubkey) trustMap.set(p.identity_pubkey.toLowerCase(), p.trust_level);
+			const key = (p.identity_pubkey || p.display_name || "").toLowerCase();
+			if (!key) continue;
+			const existing = trustMap.get(key);
+			// Only override if current is not already trusted.
+			if (!existing || existing !== "trusted") {
+				trustMap.set(key, p.trust_level);
+			}
 		}
 		const merged = (peers || []).map((p: any) => ({
 			...p,
-			trust_level: trustMap.get((p.identity_pubkey || "").toLowerCase()) || "discovered",
+			trust_level: trustMap.get((p.identity_pubkey || "").toLowerCase())
+				|| trustMap.get((p.agent_name || "").toLowerCase())
+				|| (p.peer_object_id ? "trusted" : "discovered"),
 		}));
 		res.json({ ok: true, peers: merged });
 	} catch (err: any) {
