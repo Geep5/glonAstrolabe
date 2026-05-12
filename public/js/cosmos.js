@@ -411,42 +411,42 @@ export function buildCosmos(state, materials) {
 
 	const visuals = new Map();   // id → visual state (lastSeen, baseEmissive, etc.)
 
-	// ── Dynamic layout radii ───────────────────────────────────────
-	// Compute radii based on actual node counts so dense rings get more space
-	// and new types are accommodated automatically.
-	const { computed: computedRadii, maxRadius } = computeTypeRadii(byType);
+	// ── Grid layout ────────────────────────────────────────────────
+	// Types are arranged in a 2D grid on the XZ plane. Each type occupies
+	// a cell; objects within a type fill a sub-grid inside that cell.
+	const CELL_SIZE = 22;          // distance between type cells
+	const ITEM_SPACING = 5;        // distance between objects within a cell
+	const GRID_COLS = Math.ceil(Math.sqrt(typeKeysOrdered.length));
 
-	// Deterministic processing order: priority list first, then any
-	// unknown types appended. Ensures parents are placed before satellites.
-	const typeKeysOrdered = [];
-	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
-	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
+	function cellOrigin(typeIndex) {
+		const col = typeIndex % GRID_COLS;
+		const row = Math.floor(typeIndex / GRID_COLS);
+		return new THREE.Vector3(
+			(col - (GRID_COLS - 1) / 2) * CELL_SIZE,
+			0,
+			(row - (Math.ceil(typeKeysOrdered.length / GRID_COLS) - 1) / 2) * CELL_SIZE,
+		);
+	}
 
 	// Nodes --------------------------------------------------------
-	for (const typeKey of typeKeysOrdered) {
+	for (let tIdx = 0; tIdx < typeKeysOrdered.length; tIdx++) {
+		const typeKey = typeKeysOrdered[tIdx];
 		const list = byType.get(typeKey);
 		if (!list || list.length === 0) continue;
 		const isAgentType = typeKey === "agent" || typeKey === "trading_agent";
-		const { radius, y, scale, featured } = layoutForType(typeKey, computedRadii);
+		const { scale, featured } = layoutForType(typeKey, computedRadii);
 		const { color, hex } = colorForType(typeKey);
 		const surface = planetTextureFor(typeKey, hex);
+		const origin = cellOrigin(tIdx);
 
-		// Deterministic ordering. Agents are sorted by spawn_depth first so
-		// every primary lands before its subagents \u2014 the subagent placement
-		// reads positions.get(parent) and would otherwise miss the parent.
-		// For agents we MUST sort by spawn_depth first so primaries are placed
-		// before subagents try to look them up. For every other type we sort
-		// by `updatedAt` desc — "most recently touched" lands at XII (the
-		// Deterministic ordering. Agents are sorted by spawn_depth first so
-		// every primary lands before its subagents. For every other type we
-		// sort by id for stable reloads — no time-based clustering.
+		// Deterministic ordering. Agents sorted by spawn_depth; rest by id.
 		const sorted = isAgentType
 			? [...list].sort((a, b) => spawnDepthOf(a) - spawnDepthOf(b) || a.id.localeCompare(b.id))
 			: [...list].sort((a, b) => a.id.localeCompare(b.id));
 
-		// Primaries = objects that are not orbiting a parent.
+		// Primaries = objects not orbiting a parent.
 		const primariesByType = sorted.filter((o) => !orbitParentOf.has(o.id));
-		const floatScale = radius < 1 ? 0.4 : 1.0; // central anchor drifts less
+		const subGridCols = Math.ceil(Math.sqrt(primariesByType.length));
 
 		for (let i = 0; i < sorted.length; i++) {
 			const obj = sorted[i];
@@ -455,67 +455,45 @@ export function buildCosmos(state, materials) {
 			let isFeatured = !!featured;
 			let orbitCenterY = 0, orbitYOffset = 0, orbitRadius = 0, orbitAngle = 0, parentId = null;
 			if (orbitParentOf.has(obj.id) && positions.has(orbitParentOf.get(obj.id))) {
-				// Satellite: orbit around the parent. Multiple siblings fan
-				// around the parent on a deterministic ring (XZ plane), each
-				// level out adds a touch of radius so deeper chains don't pile.
+				// Satellite: small offset near parent in 3D space.
 				parentId = orbitParentOf.get(obj.id);
 				const parentPos = positions.get(parentId);
 				const siblings = orbitChildren.get(parentId) ?? [];
 				const sIdx = siblings.indexOf(obj.id);
 				const sCount = siblings.length;
 				const depth = (isAgentType ? Math.max(1, spawnDepthOf(obj)) : 1);
-				const parentOrbit = visuals.get(parentId);
-				const parentHaloR = parentOrbit?.haloScale ?? 4;
-				const orbitR = Math.max(
-					parentHaloR + 1.5 + (depth - 1) * 1.5,
-					sCount * 0.45,
-				);
-				// XII (the noon wall) lives at world −Z, theta = −π/2.
-				// Evenly space siblings around the parent — no time-based clustering.
-				const XII_GAP = Math.PI / 24; // ~7.5° clearance each side
-				let theta;
-				if (sCount <= 1) {
-					theta = -Math.PI / 2 + XII_GAP;
-				} else {
-					theta = -Math.PI / 2 + XII_GAP + (sIdx / sCount) * (Math.PI * 2 - 2 * XII_GAP);
-				}
+				const offsetR = 2.5 + (depth - 1) * 1.2;
+				const theta = sCount <= 1
+					? hash01(obj.id) * Math.PI * 2
+					: (sIdx / sCount) * Math.PI * 2;
 				pos = new THREE.Vector3(
-					parentPos.x + Math.cos(theta) * orbitR,
-					parentPos.y + jitterY(obj.id) * 0.4,
-					parentPos.z + Math.sin(theta) * orbitR,
+					parentPos.x + Math.cos(theta) * offsetR,
+					parentPos.y + jitterY(obj.id) * 0.4 + 0.5,
+					parentPos.z + Math.sin(theta) * offsetR,
 				);
-				placementScale = 0.45;          // moon-sized next to the parent star
-				isFeatured = false;             // planet-style (low emissive, no big halo)
-				orbitRadius = orbitR;
+				placementScale = 0.45;
+				isFeatured = false;
+				orbitRadius = offsetR;
 				orbitAngle = theta;
 				orbitYOffset = jitterY(obj.id) * 0.4;
 			} else {
-				// Primary placement on the type's ring. All types use evenly-spaced
-				// hash-phase placement — no time-based clustering.
+				// Primary: place in the type's sub-grid.
 				const primaryIdx = primariesByType.indexOf(obj);
-				const ringCount = primariesByType.length;
-				const ringRadius = typeKey === "agent" && ringCount > 1
-					? 2
-					: Math.max(radius, ringCount * 0.35);
-				const XII_GAP_RING = Math.PI / 24;
-				let theta0;
-				if (ringCount <= 1) {
-					theta0 = -Math.PI / 2 + XII_GAP_RING;
-				} else {
-					theta0 = angleFor(primaryIdx, ringCount, typeKey);
-				}
-				const yJitter = jitterY(obj.id);
-				const baseY = y + yJitter;
+				const col = primaryIdx % subGridCols;
+				const row = Math.floor(primaryIdx / subGridCols);
+				const subGridW = (subGridCols - 1) * ITEM_SPACING;
+				const subGridH = (Math.ceil(primariesByType.length / subGridCols) - 1) * ITEM_SPACING;
 				pos = new THREE.Vector3(
-					Math.cos(theta0) * jitterR(obj.id, ringRadius),
-					baseY,
-					Math.sin(theta0) * jitterR(obj.id, ringRadius),
+					origin.x + (col * ITEM_SPACING) - subGridW / 2,
+					origin.y + jitterY(obj.id),
+					origin.z + (row * ITEM_SPACING) - subGridH / 2,
 				);
-				orbitRadius = ringRadius;
-				orbitAngle = theta0;
-				orbitCenterY = baseY;
+				orbitRadius = 0;
+				orbitAngle = 0;
+				orbitCenterY = origin.y;
 				parentId = null;
 			}
+
 			// Log-scaled size by change count (floor at 0.5, gentler growth).
 			const vScale = valueScaleFor(obj);
 			const changeScale = vScale != null ? vScale : Math.max(0.5, Math.min(1.6, Math.log10(1 + obj.changeCount) * 0.5 + 0.6));
@@ -523,21 +501,15 @@ export function buildCosmos(state, materials) {
 			let baseEmissive;
 			let mat;
 			if (isFeatured) {
-				// no diffuse \u2014 it doesn't reflect, it emits \u2014 and the procedural
-				// surface drives the emissive map so blotches read as plasma
-				// cells. Tone mapping is bypassed so the emissive value stays
-				// above the bloom threshold even after ACES rolls highlights off.
 				baseEmissive = 1.4;
 				mat = new THREE.MeshStandardMaterial({
 					color: 0x000000,
-					emissive: 0xc8ffe6,        // teal-tinted white \u2014 brand glow
+					emissive: 0xc8ffe6,
 					emissiveMap: surface,
 					emissiveIntensity: baseEmissive,
 					toneMapped: false,
 				});
 			} else {
-				// Everything else is a planet: Lambert (no specular/reflection)
-				// for performance. Per-vertex lighting is much cheaper than PBR.
 				baseEmissive = 0.05;
 				mat = new THREE.MeshLambertMaterial({
 					color: 0xffffff,
@@ -553,9 +525,9 @@ export function buildCosmos(state, materials) {
 			applyStoredStyle(mesh);
 			group.add(mesh);
 
-			// Every ball gets one indicator halo — a dashed equator ring.
-			const baseHaloOpacity = isFeatured ? 0.32 : 0.0;
-			const haloScale = isFeatured ? r * 3.2 : r * 2.1;
+			// Halos kept for code compatibility but invisible in grid mode.
+			const baseHaloOpacity = 0;
+			const haloScale = r * 2.1;
 			const { group: halo, material: haloMat } = makeDashedRing({
 				color,
 				dashSize: 0.10,
@@ -588,9 +560,9 @@ export function buildCosmos(state, materials) {
 			positions.set(obj.id, pos);
 			nodes.set(obj.id, { mesh, halo, haloMat, body, isKinematic });
 			visuals.set(obj.id, {
-				ampX: floatAmp(obj.id, "x") * floatScale,
-				ampY: floatAmp(obj.id, "y") * floatScale,
-				ampZ: floatAmp(obj.id, "z") * floatScale,
+				ampX: floatAmp(obj.id, "x"),
+				ampY: floatAmp(obj.id, "y"),
+				ampZ: floatAmp(obj.id, "z"),
 				freqX: floatFreq(obj.id, "x"),
 				freqY: floatFreq(obj.id, "y"),
 				freqZ: floatFreq(obj.id, "z"),
@@ -613,10 +585,6 @@ export function buildCosmos(state, materials) {
 				orbitYOffset,
 				orbitRadius,
 				orbitAngle,
-				// Orbital sweep is intentionally zero — angular position around
-				// the parent is reserved for a temporal encoding (e.g. eldest
-				// sibling at XII). Per-axis sin-wave drift (floatAmp/floatFreq
-				// applied in tick()) still gives the scene a "living" feel.
 				orbitSpeed: 0,
 				parentId,
 			});
