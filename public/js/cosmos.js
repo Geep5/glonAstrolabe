@@ -411,27 +411,46 @@ export function buildCosmos(state, materials) {
 
 	const visuals = new Map();   // id → visual state (lastSeen, baseEmissive, etc.)
 
-	// ── Single belly-ring layout ──────────────────────────────────
-	// All primary objects share ONE flat ring around the giant at Y=0.
-	// No type cells, no sub-rings, no clustering — every node is a
-	// point on the same circle. Type identity is conveyed visually
-	// (color + scale), not spatially. Objects are ordered by type
-	// (so same-type nodes appear as adjacent arcs along the ring) and
-	// then by id within a type for deterministic placement.
+	// ── Solar-system layout ─────────────────────────────────────────
+	// "Option C" topology:
 	//
-	// Anchors keep their own dedicated spiral just outside the ring;
+	//   Centre               — the local glon, rendered as a visible SUN
+	//   Inner ring (radius 6)— my agents (close-orbit children of the sun)
+	//   Middle ring (24)     — every other DAG primary (programs, memories, etc.)
+	//   Outer ring (44)      — network peers (other glons), as moons or suns
+	//                          depending on trust level
+	//
+	// A "network peer" is a /peer object with an identity_pubkey — i.e.
+	// a remote glon we've discovered on the swarm, not the local self
+	// peer ("Grant"). Untrusted peers render as small dim moons; trusted
+	// peers render bigger and brighter and (later) carry their own
+	// agents on a mini-orbit around them.
+	//
+	// Anchors keep their dedicated spiral just outside the middle ring;
 	// satellites (objects with orbitParentOf) still orbit their parent
-	// wherever the parent landed on the ring.
+	// wherever the parent landed.
 	const typeKeysOrdered = [];
 	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
 	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
 
-	const RING_RADIUS = 24;        // distance from giant to every node on the ring
-	const RING_Y = 0;              // belly height — every node sits at this Y
+	const INNER_RADIUS  = 6;       // my agents orbit close to my sun
+	const MIDDLE_RADIUS = 24;      // most DAG content
+	const OUTER_RADIUS  = 44;      // network peers (other glons)
+	const RING_Y = 0;              // every primary sits on the belly plane
 
-	// Build a global ordering of every primary (non-satellite, non-anchor)
-	// object so each gets its own deterministic angular slot on the ring.
-	const ringPrimaries = [];
+	// Distinguish a NETWORK peer (a remote glon we discovered) from local
+	// /peer entries that have no identity_pubkey (the human "Grant" self,
+	// "TestPeer", etc.). Network peers go to the outer ring; local-only
+	// peers ride the middle ring with everything else.
+	function isNetworkPeer(obj) {
+		if (!obj || obj.typeKey !== "peer") return false;
+		const idp = obj.fields?.identity_pubkey?.stringValue ?? obj.fields?.identity_pubkey;
+		return typeof idp === "string" && idp.length === 64;
+	}
+
+	const innerPrimaries  = [];
+	const middlePrimaries = [];
+	const outerPrimaries  = [];
 	for (const typeKey of typeKeysOrdered) {
 		if (typeKey === "chain.anchor") continue;            // anchors have their spiral
 		const list = byType.get(typeKey) ?? [];
@@ -440,20 +459,65 @@ export function buildCosmos(state, materials) {
 			? [...list].sort((a, b) => spawnDepthOf(a) - spawnDepthOf(b) || a.id.localeCompare(b.id))
 			: [...list].sort((a, b) => a.id.localeCompare(b.id));
 		for (const obj of sorted) {
-			if (!orbitParentOf.has(obj.id)) ringPrimaries.push(obj.id);
+			if (orbitParentOf.has(obj.id)) continue;          // satellite — handled later
+			if (isAgentType)               innerPrimaries.push(obj.id);
+			else if (isNetworkPeer(obj))   outerPrimaries.push(obj.id);
+			else                           middlePrimaries.push(obj.id);
 		}
 	}
+
+	function placeOnRing(ids, radius) {
+		const out = new Map();
+		const N = Math.max(1, ids.length);
+		for (let i = 0; i < ids.length; i++) {
+			// -π/2 offset = first slot at 12-o'clock (toward -Z),
+			// matching the scene-clock convention.
+			const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
+			out.set(ids[i], new THREE.Vector3(
+				Math.cos(angle) * radius,
+				RING_Y,
+				Math.sin(angle) * radius,
+			));
+		}
+		return out;
+	}
+	const innerPos  = placeOnRing(innerPrimaries,  INNER_RADIUS);
+	const middlePos = placeOnRing(middlePrimaries, MIDDLE_RADIUS);
+	const outerPos  = placeOnRing(outerPrimaries,  OUTER_RADIUS);
 	const primaryRingPosition = new Map();
-	const ringCount = Math.max(1, ringPrimaries.length);
-	for (let i = 0; i < ringPrimaries.length; i++) {
-		// -π/2 offset puts the first slot at "12 o'clock" (toward -Z),
-		// matching the scene-clock convention.
-		const angle = (i / ringCount) * Math.PI * 2 - Math.PI / 2;
-		primaryRingPosition.set(ringPrimaries[i], new THREE.Vector3(
-			Math.cos(angle) * RING_RADIUS,
-			RING_Y,
-			Math.sin(angle) * RING_RADIUS,
-		));
+	for (const [k, v] of innerPos)  primaryRingPosition.set(k, v);
+	for (const [k, v] of middlePos) primaryRingPosition.set(k, v);
+	for (const [k, v] of outerPos)  primaryRingPosition.set(k, v);
+
+	// ── Visible local sun (the "computer" — the local glon) ────────
+	// Sits at origin; was the invisible giant. Yellow/white emissive
+	// sphere, drawn larger than any DAG node so it reads as the center
+	// of its own system.
+	{
+		const sunGeo = new THREE.SphereGeometry(2.4, 48, 32);
+		const sunMat = new THREE.MeshStandardMaterial({
+			color: 0x2a1d0a,
+			emissive: 0xffc66b,
+			emissiveIntensity: 1.5,
+			roughness: 0.4,
+			toneMapped: false,
+		});
+		const sun = new THREE.Mesh(sunGeo, sunMat);
+		sun.position.set(0, RING_Y, 0);
+		sun.userData = { kind: "local-sun" };
+		group.add(sun);
+		// Faint corona — slightly larger transparent sphere for glow.
+		const coronaGeo = new THREE.SphereGeometry(3.6, 32, 24);
+		const coronaMat = new THREE.MeshBasicMaterial({
+			color: 0xffc66b,
+			transparent: true,
+			opacity: 0.18,
+			depthWrite: false,
+		});
+		const corona = new THREE.Mesh(coronaGeo, coronaMat);
+		corona.position.copy(sun.position);
+		corona.userData = { kind: "local-sun-corona" };
+		group.add(corona);
 	}
 
 	// Nodes --------------------------------------------------------
@@ -1152,6 +1216,93 @@ export function buildCosmos(state, materials) {
 	for (const [id, pos] of positions) {
 		homePositions.set(id, pos.clone());
 	}
-	return { group, nodes, positions, linkMeshes, tick, bumpHeat, setContextActive, setSelected };
+
+	// ── Conversation nodes ────────────────────────────────────────
+	// One node per active /peer-chat conversation that involves an agent
+	// (which is all of them in v1; once envelopes carry from_subentity_id
+	// we can distinguish human↔human and SKIP those because they're the
+	// sun-to-sun relationship). Each node sits between the local sun and
+	// the participant's position; brightness pulses with recency.
+	//
+	// updateConversations is called from main.js's polling loop with the
+	// payload of /api/peer-chat/conversations. We add/update/remove
+	// meshes diff-style so the GPU upload is minimal between ticks.
+	const conversationNodes = new Map(); // peer_object_id → { mesh, glowLine }
+	function updateConversations(conversations) {
+		const seen = new Set();
+		const conv_list = Array.isArray(conversations) ? conversations : [];
+		for (const conv of conv_list) {
+			// Position: midway between origin (local sun) and the peer's
+			// outer-ring slot. Slightly elevated so the convo node floats
+			// above the belly plane and reads as a distinct body.
+			const peerKey = conv.peer_object_id;
+			const peerPos = peerKey ? primaryRingPosition.get(peerKey) : null;
+			if (!peerPos) continue;                       // peer not on outer ring yet
+			seen.add(peerKey);
+			const mid = peerPos.clone().multiplyScalar(0.5);
+			mid.y = 1.4;
+			let entry = conversationNodes.get(peerKey);
+			if (!entry) {
+				const geo = new THREE.SphereGeometry(0.55, 24, 16);
+				const mat = new THREE.MeshStandardMaterial({
+					color: 0x000000,
+					emissive: 0xff9f43,
+					emissiveIntensity: 1.0,
+					toneMapped: false,
+				});
+				const mesh = new THREE.Mesh(geo, mat);
+				mesh.userData = {
+					kind: "conversation",
+					peer_object_id: peerKey,
+					peer_identity_pubkey: conv.peer_identity_pubkey,
+					peer_display_name: conv.peer_display_name,
+				};
+				group.add(mesh);
+				// Connector lines: sun → convo, convo → peer. Thin and
+				// dim; they brighten with recent activity via the tick.
+				const lineGeo = new THREE.BufferGeometry();
+				const linePos = new Float32Array(6 * 2); // 4 points = 2 line segments
+				lineGeo.setAttribute("position", new THREE.BufferAttribute(linePos, 3));
+				const lineMat = new THREE.LineBasicMaterial({
+					color: 0xff9f43,
+					transparent: true,
+					opacity: 0.35,
+				});
+				const glowLine = new THREE.LineSegments(lineGeo, lineMat);
+				glowLine.userData = { kind: "conversation-link", peer_object_id: peerKey };
+				group.add(glowLine);
+				entry = { mesh, glowLine };
+				conversationNodes.set(peerKey, entry);
+			}
+			entry.mesh.position.copy(mid);
+			entry.mesh.userData.peer_display_name = conv.peer_display_name;
+			entry.mesh.userData.peer_identity_pubkey = conv.peer_identity_pubkey;
+			// Recency pulse: brighter for messages in the last 10 minutes.
+			const ageS = (Date.now() - (conv.last_message_at || 0)) / 1000;
+			const recency = Math.max(0, Math.min(1, 1 - ageS / 600));
+			entry.mesh.material.emissiveIntensity = 0.5 + 1.6 * recency;
+			entry.glowLine.material.opacity = 0.25 + 0.5 * recency;
+			// Refresh connector line endpoints (in case peer moved).
+			const arr = entry.glowLine.geometry.attributes.position.array;
+			arr[0] = 0;            arr[1] = RING_Y;   arr[2] = 0;        // sun
+			arr[3] = mid.x;        arr[4] = mid.y;    arr[5] = mid.z;    // convo (segment end)
+			arr[6] = mid.x;        arr[7] = mid.y;    arr[8] = mid.z;    // convo (segment start)
+			arr[9] = peerPos.x;    arr[10] = peerPos.y; arr[11] = peerPos.z; // peer
+			entry.glowLine.geometry.attributes.position.needsUpdate = true;
+		}
+		// Reap dropped conversations.
+		for (const [k, entry] of conversationNodes) {
+			if (seen.has(k)) continue;
+			group.remove(entry.mesh);
+			group.remove(entry.glowLine);
+			entry.mesh.geometry.dispose();
+			entry.mesh.material.dispose();
+			entry.glowLine.geometry.dispose();
+			entry.glowLine.material.dispose();
+			conversationNodes.delete(k);
+		}
+	}
+
+	return { group, nodes, positions, linkMeshes, tick, bumpHeat, setContextActive, setSelected, updateConversations, conversationNodes };
 }
 

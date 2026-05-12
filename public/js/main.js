@@ -24,7 +24,7 @@ import { showPaymentModal } from "./payment-modal.js";
 	import { openAgentChat, initAgentChats } from "./chat.js";
 	import { initMiningToggle } from "./mining-toggle.js";
 	import { initNetworkPanel } from "./network-panel.js";
-	import { initPeerChatPanel } from "./peer-chat-panel.js";
+	import { initPeerChatPanel, openPeerChat } from "./peer-chat-panel.js";
 	import { getRender, setRender, clearRender, applyToMesh, updateOverlays } from "./planet-styles.js";
 	import { initPhysics } from "./physics.js";
 
@@ -423,6 +423,7 @@ function setupThree() {
 		renderCoins(snapshot.objects);
 		startJobsRefresh();
 		startTasksRefresh();
+		startConversationsRefresh();
 	}
 // Re-render the jobs panel from a fresh /api/state every JOBS_POLL_MS.
 // Each row shows context-window fill (the bar that drives compaction),
@@ -441,6 +442,28 @@ function startJobsRefresh() {
 	// Smooth 1Hz tick to update reminder countdown bars between polls.
 	setInterval(tickReminderBars, 1000);
 }
+
+	// ── Conversation nodes (per-convo bodies floating between participants) ──
+	// Poll /api/peer-chat/conversations every few seconds; pass into the
+	// cosmos so per-conversation nodes appear/update/disappear as chat
+	// activity changes. Cheap diff-style update inside updateConversations
+	// keeps GPU work to a minimum between ticks.
+	const CONVERSATIONS_POLL_MS = 3000;
+	let conversationsTimer = 0;
+	function startConversationsRefresh() {
+		clearInterval(conversationsTimer);
+		const pull = async () => {
+			try {
+				const r = await fetch("/api/peer-chat/conversations").then((res) => res.json());
+				if (r?.ok && cosmosCtx?.updateConversations) {
+					cosmosCtx.updateConversations(r.conversations ?? []);
+					refreshPickables();
+				}
+			} catch { /* swallow transient errors; next tick retries */ }
+		};
+		pull();
+		conversationsTimer = setInterval(pull, CONVERSATIONS_POLL_MS);
+	}
 
 	// ── Tasks panel ──────────────────────────────────────────────────
 
@@ -886,6 +909,7 @@ function refreshPickables() {
 	pickables = [];
 	cosmosCtx.group.traverse((obj) => {
 		if (obj.userData?.kind === "object") pickables.push(obj);
+		else if (obj.userData?.kind === "conversation") pickables.push(obj);
 	});
 
 }
@@ -1130,9 +1154,18 @@ function onClick(e) {
 	const first = hits[0]?.object;
 	if (!first) return;
 	const ud = first.userData;
-		if (ud.kind === "object") {
-			select(ud.id);
-		}
+	if (ud.kind === "object") {
+		select(ud.id);
+	} else if (ud.kind === "conversation") {
+		// Click on a conversation node opens the peer-chat panel for
+		// that peer. v1 has at most one conversation per peer; once we
+		// add per-(agent-pair) conversation_ids, this will dispatch to
+		// the specific conversation.
+		openPeerChat({
+			identity_pubkey: ud.peer_identity_pubkey,
+			display_name: ud.peer_display_name,
+		});
+	}
 }
 
 function onDoubleClick(e) {
