@@ -530,29 +530,35 @@ export function buildCosmos(state, materials) {
 				orbitAngle = theta;
 				orbitYOffset = jitterY(obj.id) * 0.4;
 			} else {
-				// Primary: place in a sub-grid projected onto the sphere's
-				// tangent plane at this cell. The (col,row) lattice is the
-				// same shape as the old flat grid, just rotated to lie
-				// flush against the sphere surface — so cells near the
-				// equator no longer have their sub-grids slicing back
-				// through origin.
+				// Primary: tight bounded cluster around the cell origin.
+				// The previous tangent-plane sub-grid extended sideways
+				// with ITEM_SPACING * subGridCols, which for dense types
+				// (40+ programs, 100+ source files) blew through adjacent
+				// ring slots and turned the ring into a soup. Cluster
+				// radius now grows LOGARITHMICALLY with object count and
+				// is capped so no cell extends more than ~4.5 units in
+				// any direction. Items get a stable hashed offset inside
+				// a ball of that radius, so dense types form a clump at
+				// the type's ring slot rather than a sheet across the ring.
 				const primaryIdx = primariesByType.indexOf(obj);
-				const col = primaryIdx % subGridCols;
-				const row = Math.floor(primaryIdx / subGridCols);
-				const subGridW = (subGridCols - 1) * ITEM_SPACING;
-				const subGridH = (Math.ceil(primariesByType.length / subGridCols) - 1) * ITEM_SPACING;
-				const u = (col * ITEM_SPACING) - subGridW / 2;
-				const v = (row * ITEM_SPACING) - subGridH / 2;
-				const frame = cellTangentFrame(origin);
-				const radialJitter = jitterY(obj.id) * 0.8; // small inward/outward variation per object
-				pos = origin.clone()
-					.add(frame.tangentU.clone().multiplyScalar(u))
-					.add(frame.tangentV.clone().multiplyScalar(v))
-					.add(frame.radialOut.clone().multiplyScalar(radialJitter));
+				const clusterR = Math.min(4.5, 1.2 + Math.log10(1 + primariesByType.length) * 1.4);
+				const theta = hash01(obj.id + "ct") * Math.PI * 2;
+				const phi = Math.acos(1 - 2 * hash01(obj.id + "cp"));
+				const rho = clusterR * Math.cbrt(0.05 + 0.95 * hash01(obj.id + "cr"));
+				pos = origin.clone().add(new THREE.Vector3(
+					rho * Math.sin(phi) * Math.cos(theta),
+					rho * Math.cos(phi),
+					rho * Math.sin(phi) * Math.sin(theta),
+				));
 				orbitRadius = 0;
 				orbitAngle = 0;
 				orbitCenterY = origin.y;
 				parentId = null;
+				// `primaryIdx` is no longer used for positioning but kept
+				// referenced so eslint doesn't flag it; the orbit-parent
+				// branch above still depends on the same iteration order
+				// for sibling indices.
+				void primaryIdx;
 			}
 
 			// Log-scaled size by change count (floor at 0.5, gentler growth).
