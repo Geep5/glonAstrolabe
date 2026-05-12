@@ -953,6 +953,13 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	vertical-align: 1px;
 }
 .network-name { color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peer-suffix {
+	margin-left: 4px;
+	font: 10px/14px ui-monospace, monospace;
+	color: var(--text-muted);
+	opacity: 0.65;
+	letter-spacing: 0.02em;
+}
 .network-action {
 	font: 10px/1 ui-monospace, "SF Mono", monospace;
 	padding: 3px 8px;

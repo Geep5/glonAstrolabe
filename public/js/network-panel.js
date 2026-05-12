@@ -17,6 +17,15 @@ function shortKey(key) {
 	return key.length > 16 ? key.slice(0, 12) + "…" : key;
 }
 
+// 8-char hex suffix off the identity pubkey. Stable per-peer, always
+// shown next to the agent name so two glons sharing a default name
+// remain distinguishable. Falls back to hyperswarm_pubkey if identity
+// isn't set yet (rare, only before /wallet bootstraps).
+function peerSuffix(identityPubkey, hyperswarmPubkey) {
+	const src = (identityPubkey && identityPubkey.length >= 8 ? identityPubkey : hyperswarmPubkey) || "";
+	return src.slice(0, 8);
+}
+
 function trustClass(level) {
 	if (level === "trusted") return "trusted";
 	if (level === "discovered") return "discovered";
@@ -79,11 +88,12 @@ async function refresh() {
 	const selfRow = self?.hyperswarm_pubkey ? (() => {
 		const name = (self.agent_name || "you").replace(/[<>&]/g, "");
 		const id = shortKey(self.identity_pubkey || self.hyperswarm_pubkey);
+		const suffix = peerSuffix(self.identity_pubkey, self.hyperswarm_pubkey);
 		const announcing = !!self.is_announcing;
 		const stateLabel = announcing ? "discoverable" : "(not announcing yet)";
 		return `<li class="network-row self">
 			<span class="network-dot ${announcing ? "live" : ""}"></span>
-			<span class="network-name" title="${id}">${name} <span class="self-tag">you</span></span>
+			<span class="network-name" title="${id}">${name}<span class="peer-suffix">·${suffix}</span> <span class="self-tag">you</span></span>
 			<span class="network-action muted" title="hyperswarm pubkey ${id}">${stateLabel}</span>
 		</li>`;
 	})() : "";
@@ -103,6 +113,7 @@ async function refresh() {
 		const trustLevel = p.peer_object_id ? "trusted" : "discovered";
 		const name = (p.agent_name || "(unnamed)").replace(/[<>&]/g, "");
 		const id = shortKey(p.identity_pubkey || p.hyperswarm_pubkey);
+		const suffix = peerSuffix(p.identity_pubkey, p.hyperswarm_pubkey);
 		const hpLower = (p.hyperswarm_pubkey || "").toLowerCase();
 		let action;
 		if (trustLevel === "trusted") {
@@ -114,7 +125,7 @@ async function refresh() {
 		}
 		return `<li class="network-row ${trustClass(trustLevel)}">
 			<span class="network-dot"></span>
-			<span class="network-name" title="${id}">${name}</span>
+			<span class="network-name" title="${id}">${name}<span class="peer-suffix">·${suffix}</span></span>
 			${action}
 		</li>`;
 	}).join("");
