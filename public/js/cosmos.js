@@ -443,6 +443,11 @@ export function buildCosmos(state, materials) {
 	// — otherwise the agent looks pinned to the sun's edge.
 	const MIN_INNER_RADIUS = 10;
 	const OUTER_PEER_RADIUS = 44;         // network peers (other glons) — semantic outer band
+	// "Cosmic void" between my outermost local ring and the peer band.
+	// Peers are conceptually OUTSIDE my ecosystem, so they need a
+	// noticeable gap — not just MIN_RING_GAP — to read as "out there"
+	// instead of "another one of mine."
+	const PEER_VOID_GAP    = 30;
 	const RING_Y           = 0;           // every primary sits on the belly plane
 	const MIN_ARC_SPACING  = 2.4;         // min tangent distance between adjacent items on a ring
 	const MIN_RING_GAP     = 3.0;         // min radial gap between concentric rings
@@ -524,14 +529,19 @@ export function buildCosmos(state, materials) {
 		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
 		prevRadius = radius;
 	}
-	// Network peers always live beyond the local content rings — the
-	// "them" band. Sits at the larger of OUTER_PEER_RADIUS (semantic
-	// floor) and the post-growth edge of the local rings + gap.
+	// Network peers always live BEYOND the local content rings — the
+	// "them" band. Three constraints, take the largest:
+	//   - OUTER_PEER_RADIUS         (semantic floor, 44)
+	//   - prevRadius + PEER_VOID_GAP (clear void after local content)
+	//   - spacingFloor              (room for the peers' own count)
+	// PEER_VOID_GAP (30) is far bigger than MIN_RING_GAP (3) on purpose:
+	// peers aren't part of my ecosystem, so the gap reads as cosmic
+	// void rather than just another ring separation.
 	if (networkPeerIds.length > 0) {
 		const N = networkPeerIds.length;
 		const spacingFloor = N <= 1 ? 0 : (N * MIN_ARC_SPACING) / (2 * Math.PI);
-		const gapFloor = prevRadius + MIN_RING_GAP;
-		const radius = Math.max(OUTER_PEER_RADIUS, spacingFloor, gapFloor);
+		const voidFloor = prevRadius + PEER_VOID_GAP;
+		const radius = Math.max(OUTER_PEER_RADIUS, voidFloor, spacingFloor);
 		const positions = placeOnRing(networkPeerIds, radius);
 		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
 		prevRadius = radius;
