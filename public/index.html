@@ -93,6 +93,21 @@
 		<div class="network-footer muted small" id="network-status"></div>
 	</aside>
 
+	<!-- Peer detail panel. Opens when you click a remote peer's sun.
+	     Lists the host (their principal/human) and any agents they've
+	     announced in their roster. Clicking any row spawns the
+	     peer-chat overlay targeted at that entity. Managed by
+	     peer-detail-panel.js. -->
+	<aside id="peer-detail" class="peer-detail" hidden>
+		<header class="peer-detail-header">
+			<span class="peer-detail-title" id="peer-detail-title">Peer</span>
+			<button class="peer-detail-close" id="peer-detail-close" title="Close">×</button>
+		</header>
+		<section class="peer-detail-body" id="peer-detail-body">
+			<!-- Populated dynamically. Sections: host, agents. -->
+		</section>
+	</aside>
+
 	<!-- Peer-chat overlay. Floats above the scene when a peered row is
 	     clicked in the Network panel. Open/close state and polling are
 	     managed by peer-chat-panel.js. -->

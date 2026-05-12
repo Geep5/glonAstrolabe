@@ -25,6 +25,7 @@ import { showPaymentModal } from "./payment-modal.js";
 	import { initMiningToggle } from "./mining-toggle.js";
 	import { initNetworkPanel } from "./network-panel.js";
 	import { initPeerChatPanel, openPeerChat } from "./peer-chat-panel.js";
+	import { initPeerDetailPanel, openPeerDetail } from "./peer-detail-panel.js";
 	import { getRender, setRender, clearRender, applyToMesh, updateOverlays } from "./planet-styles.js";
 	import { initPhysics } from "./physics.js";
 
@@ -81,6 +82,7 @@ const materials = {
 		initMiningToggle();
 		initNetworkPanel();
 		initPeerChatPanel();
+		initPeerDetailPanel();
 		setupThree();
 		buildScenes();
 		bindUI();
@@ -1172,6 +1174,23 @@ function onClick(e) {
 	if (!first) return;
 	const ud = first.userData;
 	if (ud.kind === "object") {
+		// If this object is a network peer (a remote glon's sun or
+		// moon), open the peer-detail panel: shows the host + their
+		// agent roster, each clickable to spawn a chat. Otherwise
+		// fall through to normal inspector selection.
+		const obj = ud.obj;
+		const idp = obj?.scalars?.identity_pubkey;
+		const hsp = obj?.scalars?.hyperswarm_pubkey;
+		const isNetworkPeerObj = ud.typeKey === "peer"
+			&& typeof idp === "string" && idp.length === 64
+			&& typeof hsp === "string" && hsp.length === 64;
+		if (isNetworkPeerObj) {
+			openPeerDetail({
+				identity_pubkey: idp,
+				display_name: obj?.scalars?.display_name,
+			});
+			return;
+		}
 		select(ud.id);
 	} else if (ud.kind === "conversation") {
 		// Click on a conversation node opens the peer-chat panel for
