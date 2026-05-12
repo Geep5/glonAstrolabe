@@ -457,6 +457,15 @@ export function buildCosmos(state, materials) {
 		const idp = obj.fields?.identity_pubkey?.stringValue ?? obj.fields?.identity_pubkey;
 		return typeof idp === "string" && idp.length === 64;
 	}
+	function getTrustLevel(obj) {
+		const t = obj?.fields?.trust_level;
+		if (!t) return "stranger";
+		return (typeof t === "string") ? t : (t.stringValue ?? "stranger");
+	}
+	// Mirrors /peer's isPeered() server-side — "peered" means
+	// trust_level ≥ trusted, the gate every cross-glon feature uses.
+	const PEERED_TRUST_LEVELS = new Set(["trusted", "friend", "family", "self"]);
+	function isPeeredPeer(obj) { return PEERED_TRUST_LEVELS.has(getTrustLevel(obj)); }
 
 	// One bucket per local typeKey. Each becomes its own ring.
 	const buckets = new Map();            // typeKey → [obj_id, ...]
@@ -631,7 +640,7 @@ export function buildCosmos(state, materials) {
 			// Log-scaled size by change count (floor at 0.5, gentler growth).
 			const vScale = valueScaleFor(obj);
 			const changeScale = vScale != null ? vScale : Math.max(0.5, Math.min(1.6, Math.log10(1 + obj.changeCount) * 0.5 + 0.6));
-			const r = scale * placementScale * changeScale * 0.6;
+			let r = scale * placementScale * changeScale * 0.6;
 			let baseEmissive;
 			let mat;
 			if (isFeatured) {
@@ -652,12 +661,61 @@ export function buildCosmos(state, materials) {
 					emissiveIntensity: baseEmissive,
 				});
 			}
+			// Network peers (other glons we've seen on the swarm) get a
+			// dedicated visual treatment:
+			//   • trust_level=discovered → MOON: small, dim grey, no
+			//     emissive glow. "Out there, not yet introduced."
+			//   • trust_level=trusted/friend/family/self → SUN: bigger,
+			//     yellow emissive with a corona ring. "Connected
+			//     ecosystem; click here to talk."
+			// Override after the standard per-type material/scale are set
+			// so we don't have to wedge this into the type-color path.
+			const networkPeer = isNetworkPeer(obj) && !parentId;
+			if (networkPeer) {
+				if (isPeeredPeer(obj)) {
+					// SUN — peered remote glon
+					r = Math.max(r, 1.6);
+					mat = new THREE.MeshStandardMaterial({
+						color: 0x2a1d0a,
+						emissive: 0xffc66b,
+						emissiveIntensity: 1.4,
+						roughness: 0.4,
+						toneMapped: false,
+					});
+					baseEmissive = 1.4;
+				} else {
+					// MOON — discovered, not yet peered
+					r = Math.min(r, 0.8);
+					mat = new THREE.MeshLambertMaterial({
+						color: 0x9ca3af,        // cool grey moonlight
+						emissive: 0x232a31,
+						emissiveIntensity: 0.12,
+					});
+					baseEmissive = 0.12;
+				}
+			}
 			const mesh = new THREE.Mesh(typeKey === "chain.anchor" ? materials.sphereSmall : materials.sphere, mat);
 			mesh.position.copy(pos);
 			mesh.scale.setScalar(r);
 			mesh.userData = { kind: "object", id: obj.id, typeKey, obj, valueScale: vScale };
 			applyStoredStyle(mesh);
 			group.add(mesh);
+			// Sun-peer corona: faint outer glow around peered remote
+			// glons, matching the local sun's treatment so connected
+			// glons read as "another sun."
+			if (networkPeer && isPeeredPeer(obj)) {
+				const coronaGeo = new THREE.SphereGeometry(r * 1.65, 24, 16);
+				const coronaMat = new THREE.MeshBasicMaterial({
+					color: 0xffc66b,
+					transparent: true,
+					opacity: 0.20,
+					depthWrite: false,
+				});
+				const corona = new THREE.Mesh(coronaGeo, coronaMat);
+				corona.position.copy(pos);
+				corona.userData = { kind: "peer-sun-corona", id: obj.id };
+				group.add(corona);
+			}
 
 			// Halos kept for code compatibility but invisible in grid mode.
 			const baseHaloOpacity = 0;
