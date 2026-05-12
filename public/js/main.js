@@ -153,21 +153,34 @@ function setupThree() {
 	scene.fog = new THREE.Fog(0x000000, 40, 140);
 
 	// "Invisible giant in the middle of the galaxy" framing: the camera
-	// starts inside the cosmos at the giant's head height, looking down
-	// at the belly (origin). The Fibonacci-sphere layout in cosmos.js
-	// wraps content around this position so anywhere the user looks —
-	// up to the agent constellation, down to the program floor, sideways
-	// to the orbiting types — there's something to see.
+	// starts inside the cosmos at the giant's head height. The lower
+	// hemisphere is the belly — the floor of nodes; the upper hemisphere
+	// is the sky above. Every type Fibonacci-distributes around this
+	// point, so anywhere the camera looks there is content.
 	camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 400);
 	camera.position.set(0, 6, 0);
+	// Start gently pitched down at the belly so the user opens onto the
+	// floor of nodes rather than staring at the horizon.
+	const initialPitch = -0.35; // ~20° down
+	camera.rotation.order = "YXZ";
+	camera.rotation.set(initialPitch, 0, 0);
 
 	controls = new OrbitControls(camera, canvas);
-	controls.target.set(0, 0, 0);
-	// Keep the camera in the upper hemisphere relative to the belly so the
-	// user can't fall through the floor of nodes. They can still pitch up
-	// to inspect the agent constellation overhead.
-	controls.maxPolarAngle = Math.PI - 0.05;
+	// Mouse rotation is handled by our own yaw/pitch handler below
+	// (true "turn the giant's head" rather than orbit-around-a-target).
+	// OrbitControls stays in the picture only for mouse-wheel zoom and
+	// for the focus-tween code that already depends on its .target.
+	controls.enableRotate = false;
 	controls.minDistance = 1.5;
+	// Park the target a few units in front of the camera so wheel zoom
+	// pulls the giant forward along its facing direction rather than
+	// snapping toward world origin. The custom look handler keeps this
+	// target glued ahead during rotation; WASD moves them together.
+	(() => {
+		const fwd = new THREE.Vector3();
+		camera.getWorldDirection(fwd);
+		controls.target.copy(camera.position).add(fwd.multiplyScalar(3));
+	})();
 	controls.enableDamping = true;
 	controls.dampingFactor = 0.08;
 	controls.minDistance = 3;
@@ -256,6 +269,79 @@ function setupThree() {
 	canvas.addEventListener("pointerleave", () => { cursorActive = false; });
 	canvas.addEventListener("wheel", () => { followId = null; }, { passive: true });
 	canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+	// ── Head-turn look controls ────────────────────────────────────
+	// Left-drag rotates the camera in place around its own eye (yaw +
+	// pitch) — the "invisible giant turning their head" feel. Distinct
+	// from the right-drag handler below (which pans) and from
+	// OrbitControls' orbit-around-target (which we disabled).
+	//
+	// We don't capture the pointer on press, so quick left-clicks still
+	// fire `click` / `dblclick` for picking and focus. Drag past a tiny
+	// threshold and the click events are suppressed via DRAG_THRESHOLD.
+	const LOOK_SENSITIVITY = 0.0035;
+	const MAX_PITCH = Math.PI / 2 - 0.05;
+	const DRAG_THRESHOLD = 4;             // px; below this, treat as click
+	let lookDragging = false;
+	let lookSuppressClick = false;
+	let lookStartX = 0, lookStartY = 0;
+	let lookLastX = 0, lookLastY = 0;
+	function applyLookDelta(dx, dy) {
+		const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
+		euler.y -= dx * LOOK_SENSITIVITY;
+		euler.x -= dy * LOOK_SENSITIVITY;
+		euler.x = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, euler.x));
+		euler.z = 0;
+		camera.quaternion.setFromEuler(euler);
+		// Keep controls.target glued ~3 units ahead so OrbitControls'
+		// wheel-zoom + the focus-tween code stay coherent.
+		const fwd = new THREE.Vector3();
+		camera.getWorldDirection(fwd);
+		controls.target.copy(camera.position).add(fwd.multiplyScalar(3));
+	}
+	canvas.addEventListener("pointerdown", (e) => {
+		if (e.button !== 0) return;       // left button only
+		if (activeTween) return;
+		lookDragging = true;
+		lookSuppressClick = false;
+		lookStartX = lookLastX = e.clientX;
+		lookStartY = lookLastY = e.clientY;
+		followId = null;
+	});
+	window.addEventListener("pointermove", (e) => {
+		if (!lookDragging) return;
+		const dx = e.clientX - lookLastX;
+		const dy = e.clientY - lookLastY;
+		lookLastX = e.clientX;
+		lookLastY = e.clientY;
+		if (!lookSuppressClick) {
+			const totalDx = Math.abs(e.clientX - lookStartX);
+			const totalDy = Math.abs(e.clientY - lookStartY);
+			if (totalDx + totalDy > DRAG_THRESHOLD) {
+				lookSuppressClick = true;
+				canvas.setPointerCapture?.(e.pointerId);
+			} else {
+				return;             // tiny jitter; don't rotate, let click fire
+			}
+		}
+		applyLookDelta(dx, dy);
+	});
+	window.addEventListener("pointerup", (e) => {
+		if (e.button !== 0) return;
+		if (!lookDragging) return;
+		lookDragging = false;
+		if (lookSuppressClick) {
+			try { canvas.releasePointerCapture(e.pointerId); } catch {}
+		}
+	});
+	// If a drag rotated the view, swallow the trailing `click` so picks
+	// don't fire at the drag-end position.
+	canvas.addEventListener("click", (e) => {
+		if (lookSuppressClick) {
+			e.stopImmediatePropagation();
+			lookSuppressClick = false;
+		}
+	}, true);
 	canvas.addEventListener("pointerdown", (e) => {
 		if (e.button !== 2) return;
 		rightMouseDown = true;

@@ -415,32 +415,22 @@ export function buildCosmos(state, materials) {
 	// The scene is built around an invisible "giant" at the origin: the
 	// human / principal. Type cells wrap around the giant on the surface
 	// of a sphere so anywhere the camera looks (up, down, sideways) there
-	// is content. The agent type is pinned to the top of the sphere so a
-	// multi-agent roster reads as the giant's "constellation" overhead.
+	// is content.
 	//
-	// Non-agent types are distributed via Fibonacci sphere (golden-angle)
-	// packing, which gives the most even point spread for an arbitrary
-	// count of types without clumping at the poles. Sub-grids inside each
-	// type cell are projected onto the sphere's tangent plane at that
-	// cell, so neighbouring types don't have their object clusters
-	// intersect through the center of the sphere.
+	// Every type — including agents and programs — joins the Fibonacci
+	// sphere (golden-angle) distribution. Agents are not pinned overhead;
+	// they live among the rest of the cosmos, which keeps the visual
+	// flat: every type is equally a "thing in the giant's world", and
+	// adding a second agent is just another node in its type's cell.
+	// Sub-grids inside each cell are projected onto the sphere's tangent
+	// plane at that cell so neighbouring types don't intersect through
+	// origin.
 	const typeKeysOrdered = [];
 	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
 	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
 
 	const SPHERE_RADIUS = 30;      // distance from giant (origin) to type cells
 	const ITEM_SPACING = 3.5;      // tangent-plane spacing between objects within a cell
-	const AGENT_OVERHEAD = new THREE.Vector3(0, SPHERE_RADIUS, 0);
-
-	// Types that should pin to fixed positions instead of joining the
-	// Fibonacci distribution. Keeps spatial semantics meaningful: agents
-	// overhead, programs at the south pole (they're the infrastructure
-	// the giant stands on).
-	const PINNED_TYPE_POSITIONS = new Map([
-		["agent",         AGENT_OVERHEAD.clone()],
-		["trading_agent", AGENT_OVERHEAD.clone()],
-		["program",       new THREE.Vector3(0, -SPHERE_RADIUS, 0)],
-	]);
 
 	function fibonacciSpherePoint(i, total, radius) {
 		// i in [0, total), returns evenly-distributed point on a sphere.
@@ -454,15 +444,9 @@ export function buildCosmos(state, materials) {
 		);
 	}
 
-	// Precompute cell positions. Pinned types take their assigned spots;
-	// remaining types share the Fibonacci distribution.
 	const cellPositions = new Map();
-	const remainingTypes = typeKeysOrdered.filter((tk) => !PINNED_TYPE_POSITIONS.has(tk));
-	for (const [tk, pos] of PINNED_TYPE_POSITIONS) {
-		if (typeKeysOrdered.includes(tk)) cellPositions.set(tk, pos.clone());
-	}
-	for (let i = 0; i < remainingTypes.length; i++) {
-		cellPositions.set(remainingTypes[i], fibonacciSpherePoint(i, remainingTypes.length, SPHERE_RADIUS));
+	for (let i = 0; i < typeKeysOrdered.length; i++) {
+		cellPositions.set(typeKeysOrdered[i], fibonacciSpherePoint(i, typeKeysOrdered.length, SPHERE_RADIUS));
 	}
 
 	function cellOrigin(typeIndex) {
