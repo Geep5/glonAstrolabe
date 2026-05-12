@@ -411,42 +411,47 @@ export function buildCosmos(state, materials) {
 
 	const visuals = new Map();   // id → visual state (lastSeen, baseEmissive, etc.)
 
-	// ── Sphere-shell layout ─────────────────────────────────────────
+	// ── Belly-ring layout ──────────────────────────────────────────
 	// The scene is built around an invisible "giant" at the origin: the
-	// human / principal. Type cells wrap around the giant on the surface
-	// of a sphere so anywhere the camera looks (up, down, sideways) there
-	// is content.
+	// human / principal. Type cells form a flat ring around the giant's
+	// belly (Y = 0) — like Saturn's rings, with the giant at the center.
+	// The camera looks down from head height onto this ring.
 	//
-	// Every type — including agents and programs — joins the Fibonacci
-	// sphere (golden-angle) distribution. Agents are not pinned overhead;
-	// they live among the rest of the cosmos, which keeps the visual
-	// flat: every type is equally a "thing in the giant's world", and
-	// adding a second agent is just another node in its type's cell.
-	// Sub-grids inside each cell are projected onto the sphere's tangent
-	// plane at that cell so neighbouring types don't intersect through
-	// origin.
+	// Every type — including agents and programs — gets one slot on the
+	// ring, evenly distributed in angle. Adding a new type just inserts
+	// another slot; rebalancing happens automatically because slot count
+	// equals type count.
+	//
+	// Sub-grids inside each cell extend along TWO local axes:
+	//   - tangent-along-ring (perpendicular to the radial direction, in
+	//     the horizontal plane) — so items spread sideways along the ring
+	//   - vertical (world Y) — so denser type cells stack upward
+	// This keeps every object cluster facing the giant and at roughly
+	// the same horizontal distance, instead of poking inward through the
+	// center or outward into the void.
 	const typeKeysOrdered = [];
 	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
 	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
 
-	const SPHERE_RADIUS = 30;      // distance from giant (origin) to type cells
-	const ITEM_SPACING = 3.5;      // tangent-plane spacing between objects within a cell
+	const RING_RADIUS = 22;        // distance from giant to type cells along the ring
+	const RING_Y = 0;              // belly height
+	const ITEM_SPACING = 3.5;      // spacing between objects within a cell (tangent + vertical)
 
-	function fibonacciSpherePoint(i, total, radius) {
-		// i in [0, total), returns evenly-distributed point on a sphere.
-		const idx = i + 0.5;
-		const phi = Math.acos(1 - 2 * idx / total);
-		const theta = Math.PI * (1 + Math.sqrt(5)) * idx;
+	function ringPoint(typeIndex, total) {
+		// Slot index → angle around the ring. -π/2 starting offset puts
+		// the first type at "12 o'clock" (toward -Z), so the visual
+		// reading order matches the scene clock that lives in the floor.
+		const angle = (typeIndex / total) * Math.PI * 2 - Math.PI / 2;
 		return new THREE.Vector3(
-			Math.cos(theta) * Math.sin(phi) * radius,
-			Math.cos(phi) * radius,
-			Math.sin(theta) * Math.sin(phi) * radius,
+			Math.cos(angle) * RING_RADIUS,
+			RING_Y,
+			Math.sin(angle) * RING_RADIUS,
 		);
 	}
 
 	const cellPositions = new Map();
 	for (let i = 0; i < typeKeysOrdered.length; i++) {
-		cellPositions.set(typeKeysOrdered[i], fibonacciSpherePoint(i, typeKeysOrdered.length, SPHERE_RADIUS));
+		cellPositions.set(typeKeysOrdered[i], ringPoint(i, typeKeysOrdered.length));
 	}
 
 	function cellOrigin(typeIndex) {
@@ -454,20 +459,20 @@ export function buildCosmos(state, materials) {
 		return cellPositions.get(tk).clone();
 	}
 
-	// For each cell on the sphere, build a local tangent frame so the
-	// sub-grid lives flush against the sphere's surface rather than
-	// extending in a fixed world plane (which would have grids near the
-	// equator slicing back through the origin).
+	// Build a local tangent frame for each cell on the ring:
+	//   - radialOut: horizontal vector from belly to cell
+	//   - tangentU:  perpendicular to radial, in the horizontal plane
+	//                (along the ring's circumference)
+	//   - tangentV:  world up (Y) — sub-grid stacks vertically
+	// Cells with many objects therefore grow upward as columns rather
+	// than spreading into neighbouring cells.
 	function cellTangentFrame(origin) {
-		const radialOut = origin.clone();
-		if (radialOut.lengthSq() < 0.001) radialOut.set(0, 1, 0);
+		const radialOut = new THREE.Vector3(origin.x, 0, origin.z);
+		if (radialOut.lengthSq() < 0.001) radialOut.set(0, 0, 1);
 		radialOut.normalize();
-		// Pick a stable tangent: cross with world-up unless the cell is
-		// at a pole, in which case use world-right instead.
-		let tangentU = new THREE.Vector3(0, 1, 0).cross(radialOut);
-		if (tangentU.lengthSq() < 1e-4) tangentU = new THREE.Vector3(1, 0, 0).cross(radialOut);
-		tangentU.normalize();
-		const tangentV = radialOut.clone().cross(tangentU).normalize();
+		// Tangent along the ring = world-up × radialOut. Right-handed.
+		const tangentU = new THREE.Vector3(0, 1, 0).cross(radialOut).normalize();
+		const tangentV = new THREE.Vector3(0, 1, 0);
 		return { radialOut, tangentU, tangentV };
 	}
 
@@ -715,11 +720,11 @@ export function buildCosmos(state, materials) {
 			if (!seen.has(a.id)) anchorChain.push(a);
 		}
 
-		// Anchor spiral lives just outside the type-cell sphere shell, so
-		// it forms a halo around the giant + the wrapped types. SPHERE_RADIUS
-		// is the type-cell radius; sub-grids extend a few units beyond that
-		// in tangent directions, so we add a small fixed buffer.
-		const gridOuterRadius = SPHERE_RADIUS + 6;
+		// Anchor spiral lives just outside the type-cell ring, so it
+		// forms an outer halo at belly height. RING_RADIUS is the
+		// type-cell ring radius; sub-grids extend a few units along
+		// the tangent direction so we add a small buffer.
+		const gridOuterRadius = RING_RADIUS + 6;
 		const anchorGap = Math.min(4.0, Math.max(2.0, 1.5 + anchors.length * 0.1));
 		const R0 = gridOuterRadius + anchorGap;
 		const DR = anchors.length > 1 ? Math.max(0.003, 2.5 / anchors.length) : 0;

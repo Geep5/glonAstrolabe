@@ -1169,24 +1169,25 @@ function onDoubleClick(e) {
 		const r = node.mesh.geometry?.parameters?.radius ?? 1;
 		const s = node.mesh.scale.x;
 		const worldR = r * s;
-		// Distance the camera should sit FROM the node when focused. Min
-		// floor so small spheres don't overwhelm the viewport.
 		const dist = Math.max(8, worldR * 4 + 6);
-		// Giant POV: pull the camera ALONG the ray from origin → node,
-		// landing slightly closer to origin than the node. The user stays
-		// "inside" the galaxy looking outward at the node, instead of
-		// jumping outside the shell to look back in.
-		const fromOrigin = target.length();
-		if (fromOrigin < 0.001) {
-			// Degenerate: node is at origin. Pull camera back along view axis.
+		// Giant POV: pull the camera horizontally toward the node along
+		// the floor of the ring, but stay at giant's eye-level Y. This
+		// keeps the visual frame "tall thing looking out at the ring"
+		// instead of dropping the camera onto the ring's plane.
+		const horizontalDir = new THREE.Vector3(target.x, 0, target.z);
+		const horizontalDist = horizontalDir.length();
+		if (horizontalDist < 0.001) {
+			// Node is directly above/below the giant — pull camera back
+			// along its current view direction.
 			const back = new THREE.Vector3();
 			camera.getWorldDirection(back);
 			tweenCamera(target.clone().sub(back.multiplyScalar(dist)), target);
 			return;
 		}
-		const dir = target.clone().divideScalar(fromOrigin); // unit vector origin → node
-		const cameraDistFromOrigin = Math.max(1.5, fromOrigin - dist);
-		const cameraPos = dir.clone().multiplyScalar(cameraDistFromOrigin);
+		horizontalDir.divideScalar(horizontalDist);                 // unit vector toward node, in XZ
+		const cameraXZRadius = Math.max(1.5, horizontalDist - dist);
+		const cameraPos = horizontalDir.multiplyScalar(cameraXZRadius);
+		cameraPos.y = camera.position.y;                            // preserve eye-level
 		tweenCamera(cameraPos, target);
 	}
 
