@@ -414,6 +414,9 @@ export function buildCosmos(state, materials) {
 	// ── Grid layout ────────────────────────────────────────────────
 	// Types are arranged in a 2D grid on the XZ plane. Each type occupies
 	// a cell; objects within a type fill a sub-grid inside that cell.
+	const typeKeysOrdered = [];
+	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
+	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
 	const CELL_SIZE = 22;          // distance between type cells
 	const ITEM_SPACING = 5;        // distance between objects within a cell
 	const GRID_COLS = Math.ceil(Math.sqrt(typeKeysOrdered.length));
