@@ -411,24 +411,80 @@ export function buildCosmos(state, materials) {
 
 	const visuals = new Map();   // id → visual state (lastSeen, baseEmissive, etc.)
 
-	// ── Grid layout ────────────────────────────────────────────────
-	// Types are arranged in a 2D grid on the XZ plane. Each type occupies
-	// a cell; objects within a type fill a sub-grid inside that cell.
+	// ── Sphere-shell layout ─────────────────────────────────────────
+	// The scene is built around an invisible "giant" at the origin: the
+	// human / principal. Type cells wrap around the giant on the surface
+	// of a sphere so anywhere the camera looks (up, down, sideways) there
+	// is content. The agent type is pinned to the top of the sphere so a
+	// multi-agent roster reads as the giant's "constellation" overhead.
+	//
+	// Non-agent types are distributed via Fibonacci sphere (golden-angle)
+	// packing, which gives the most even point spread for an arbitrary
+	// count of types without clumping at the poles. Sub-grids inside each
+	// type cell are projected onto the sphere's tangent plane at that
+	// cell, so neighbouring types don't have their object clusters
+	// intersect through the center of the sphere.
 	const typeKeysOrdered = [];
 	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
 	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
-	const CELL_SIZE = 22;          // distance between type cells
-	const ITEM_SPACING = 5;        // distance between objects within a cell
-	const GRID_COLS = Math.ceil(Math.sqrt(typeKeysOrdered.length));
+
+	const SPHERE_RADIUS = 30;      // distance from giant (origin) to type cells
+	const ITEM_SPACING = 3.5;      // tangent-plane spacing between objects within a cell
+	const AGENT_OVERHEAD = new THREE.Vector3(0, SPHERE_RADIUS, 0);
+
+	// Types that should pin to fixed positions instead of joining the
+	// Fibonacci distribution. Keeps spatial semantics meaningful: agents
+	// overhead, programs at the south pole (they're the infrastructure
+	// the giant stands on).
+	const PINNED_TYPE_POSITIONS = new Map([
+		["agent",         AGENT_OVERHEAD.clone()],
+		["trading_agent", AGENT_OVERHEAD.clone()],
+		["program",       new THREE.Vector3(0, -SPHERE_RADIUS, 0)],
+	]);
+
+	function fibonacciSpherePoint(i, total, radius) {
+		// i in [0, total), returns evenly-distributed point on a sphere.
+		const idx = i + 0.5;
+		const phi = Math.acos(1 - 2 * idx / total);
+		const theta = Math.PI * (1 + Math.sqrt(5)) * idx;
+		return new THREE.Vector3(
+			Math.cos(theta) * Math.sin(phi) * radius,
+			Math.cos(phi) * radius,
+			Math.sin(theta) * Math.sin(phi) * radius,
+		);
+	}
+
+	// Precompute cell positions. Pinned types take their assigned spots;
+	// remaining types share the Fibonacci distribution.
+	const cellPositions = new Map();
+	const remainingTypes = typeKeysOrdered.filter((tk) => !PINNED_TYPE_POSITIONS.has(tk));
+	for (const [tk, pos] of PINNED_TYPE_POSITIONS) {
+		if (typeKeysOrdered.includes(tk)) cellPositions.set(tk, pos.clone());
+	}
+	for (let i = 0; i < remainingTypes.length; i++) {
+		cellPositions.set(remainingTypes[i], fibonacciSpherePoint(i, remainingTypes.length, SPHERE_RADIUS));
+	}
 
 	function cellOrigin(typeIndex) {
-		const col = typeIndex % GRID_COLS;
-		const row = Math.floor(typeIndex / GRID_COLS);
-		return new THREE.Vector3(
-			(col - (GRID_COLS - 1) / 2) * CELL_SIZE,
-			0,
-			(row - (Math.ceil(typeKeysOrdered.length / GRID_COLS) - 1) / 2) * CELL_SIZE,
-		);
+		const tk = typeKeysOrdered[typeIndex];
+		return cellPositions.get(tk).clone();
+	}
+
+	// For each cell on the sphere, build a local tangent frame so the
+	// sub-grid lives flush against the sphere's surface rather than
+	// extending in a fixed world plane (which would have grids near the
+	// equator slicing back through the origin).
+	function cellTangentFrame(origin) {
+		const radialOut = origin.clone();
+		if (radialOut.lengthSq() < 0.001) radialOut.set(0, 1, 0);
+		radialOut.normalize();
+		// Pick a stable tangent: cross with world-up unless the cell is
+		// at a pole, in which case use world-right instead.
+		let tangentU = new THREE.Vector3(0, 1, 0).cross(radialOut);
+		if (tangentU.lengthSq() < 1e-4) tangentU = new THREE.Vector3(1, 0, 0).cross(radialOut);
+		tangentU.normalize();
+		const tangentV = radialOut.clone().cross(tangentU).normalize();
+		return { radialOut, tangentU, tangentV };
 	}
 
 	// Nodes --------------------------------------------------------
@@ -437,12 +493,11 @@ export function buildCosmos(state, materials) {
 		const list = byType.get(typeKey);
 		if (!list || list.length === 0) continue;
 		const isAgentType = typeKey === "agent" || typeKey === "trading_agent";
-		// Grid layout uses CELL_SIZE/sub-grid spacing instead of per-type
-		// ring radii, so the dynamic-radii Map (computedRadii) that older
-		// ring layouts threaded through is no longer computed in this
-		// scope. layoutForType still accepts it as an optional argument
-		// for compatibility but it's not needed here — drop it to avoid
-		// the ReferenceError that landed in commit 3fdf721.
+		// Sphere-shell layout positions are precomputed in cellPositions
+		// above. layoutForType still returns scale + featured flags but
+		// the legacy `radius` field it derives is unused — we let the
+		// optional-chain in layoutForType absorb a missing computedRadii
+		// arg rather than threading one through.
 		const { scale, featured } = layoutForType(typeKey);
 		const { color, hex } = colorForType(typeKey);
 		const surface = planetTextureFor(typeKey, hex);
@@ -486,17 +541,25 @@ export function buildCosmos(state, materials) {
 				orbitAngle = theta;
 				orbitYOffset = jitterY(obj.id) * 0.4;
 			} else {
-				// Primary: place in the type's sub-grid.
+				// Primary: place in a sub-grid projected onto the sphere's
+				// tangent plane at this cell. The (col,row) lattice is the
+				// same shape as the old flat grid, just rotated to lie
+				// flush against the sphere surface — so cells near the
+				// equator no longer have their sub-grids slicing back
+				// through origin.
 				const primaryIdx = primariesByType.indexOf(obj);
 				const col = primaryIdx % subGridCols;
 				const row = Math.floor(primaryIdx / subGridCols);
 				const subGridW = (subGridCols - 1) * ITEM_SPACING;
 				const subGridH = (Math.ceil(primariesByType.length / subGridCols) - 1) * ITEM_SPACING;
-				pos = new THREE.Vector3(
-					origin.x + (col * ITEM_SPACING) - subGridW / 2,
-					origin.y + jitterY(obj.id),
-					origin.z + (row * ITEM_SPACING) - subGridH / 2,
-				);
+				const u = (col * ITEM_SPACING) - subGridW / 2;
+				const v = (row * ITEM_SPACING) - subGridH / 2;
+				const frame = cellTangentFrame(origin);
+				const radialJitter = jitterY(obj.id) * 0.8; // small inward/outward variation per object
+				pos = origin.clone()
+					.add(frame.tangentU.clone().multiplyScalar(u))
+					.add(frame.tangentV.clone().multiplyScalar(v))
+					.add(frame.radialOut.clone().multiplyScalar(radialJitter));
 				orbitRadius = 0;
 				orbitAngle = 0;
 				orbitCenterY = origin.y;
@@ -668,19 +731,11 @@ export function buildCosmos(state, materials) {
 			if (!seen.has(a.id)) anchorChain.push(a);
 		}
 
-		// Dynamic spiral placement: starts just outside the outermost
-		// grid cell and scales tightness based on anchor count.
-		//
-		// Older ring layouts kept a `maxRadius` from computeTypeRadii(); the
-		// grid-layout refactor (commit 3fdf721) removed that computation but
-		// left this reference orphaned. Reconstruct an equivalent "outermost
-		// extent" from the live grid geometry — half the diagonal of the
-		// grid plus the sub-grid half-extent, so anchors begin just outside
-		// the farthest type cell regardless of how many types we have.
-		const GRID_ROWS = Math.ceil(typeKeysOrdered.length / GRID_COLS);
-		const halfDiagX = ((GRID_COLS - 1) / 2) * CELL_SIZE;
-		const halfDiagZ = ((GRID_ROWS - 1) / 2) * CELL_SIZE;
-		const gridOuterRadius = Math.sqrt(halfDiagX * halfDiagX + halfDiagZ * halfDiagZ) + CELL_SIZE / 2;
+		// Anchor spiral lives just outside the type-cell sphere shell, so
+		// it forms a halo around the giant + the wrapped types. SPHERE_RADIUS
+		// is the type-cell radius; sub-grids extend a few units beyond that
+		// in tangent directions, so we add a small fixed buffer.
+		const gridOuterRadius = SPHERE_RADIUS + 6;
 		const anchorGap = Math.min(4.0, Math.max(2.0, 1.5 + anchors.length * 0.1));
 		const R0 = gridOuterRadius + anchorGap;
 		const DR = anchors.length > 1 ? Math.max(0.003, 2.5 / anchors.length) : 0;

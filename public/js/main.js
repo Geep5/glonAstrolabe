@@ -152,11 +152,22 @@ function setupThree() {
 	scene = new THREE.Scene();
 	scene.fog = new THREE.Fog(0x000000, 40, 140);
 
+	// "Invisible giant in the middle of the galaxy" framing: the camera
+	// starts inside the cosmos at the giant's head height, looking down
+	// at the belly (origin). The Fibonacci-sphere layout in cosmos.js
+	// wraps content around this position so anywhere the user looks —
+	// up to the agent constellation, down to the program floor, sideways
+	// to the orbiting types — there's something to see.
 	camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 400);
-	camera.position.set(0, 20, 45);
+	camera.position.set(0, 6, 0);
 
 	controls = new OrbitControls(camera, canvas);
 	controls.target.set(0, 0, 0);
+	// Keep the camera in the upper hemisphere relative to the belly so the
+	// user can't fall through the floor of nodes. They can still pitch up
+	// to inspect the agent constellation overhead.
+	controls.maxPolarAngle = Math.PI - 0.05;
+	controls.minDistance = 1.5;
 	controls.enableDamping = true;
 	controls.dampingFactor = 0.08;
 	controls.minDistance = 3;
@@ -1069,13 +1080,28 @@ function onDoubleClick(e) {
 		const node = cosmosCtx.nodes.get(id);
 		if (!node) return;
 		const target = node.mesh.position.clone();
-		// Minimum 15 units so small nodes don't overwhelm the viewport.
 		const r = node.mesh.geometry?.parameters?.radius ?? 1;
 		const s = node.mesh.scale.x;
 		const worldR = r * s;
-		const dist = Math.max(15, worldR * 4 + 10);
-		const offset = target.clone().normalize().multiplyScalar(dist);
-		tweenCamera(target.clone().add(offset).add(new THREE.Vector3(0, dist * 0.4, 0)), target);
+		// Distance the camera should sit FROM the node when focused. Min
+		// floor so small spheres don't overwhelm the viewport.
+		const dist = Math.max(8, worldR * 4 + 6);
+		// Giant POV: pull the camera ALONG the ray from origin → node,
+		// landing slightly closer to origin than the node. The user stays
+		// "inside" the galaxy looking outward at the node, instead of
+		// jumping outside the shell to look back in.
+		const fromOrigin = target.length();
+		if (fromOrigin < 0.001) {
+			// Degenerate: node is at origin. Pull camera back along view axis.
+			const back = new THREE.Vector3();
+			camera.getWorldDirection(back);
+			tweenCamera(target.clone().sub(back.multiplyScalar(dist)), target);
+			return;
+		}
+		const dir = target.clone().divideScalar(fromOrigin); // unit vector origin → node
+		const cameraDistFromOrigin = Math.max(1.5, fromOrigin - dist);
+		const cameraPos = dir.clone().multiplyScalar(cameraDistFromOrigin);
+		tweenCamera(cameraPos, target);
 	}
 
 function highlightSelected() {
