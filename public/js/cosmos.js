@@ -437,31 +437,16 @@ export function buildCosmos(state, materials) {
 		// For agents we MUST sort by spawn_depth first so primaries are placed
 		// before subagents try to look them up. For every other type we sort
 		// by `updatedAt` desc — "most recently touched" lands at XII (the
-		// noon wall) and stale entries drift clockwise into the past.
+		// Deterministic ordering. Agents are sorted by spawn_depth first so
+		// every primary lands before its subagents. For every other type we
+		// sort by id for stable reloads — no time-based clustering.
 		const sorted = isAgentType
 			? [...list].sort((a, b) => spawnDepthOf(a) - spawnDepthOf(b) || a.id.localeCompare(b.id))
-			: [...list].sort((a, b) => {
-				const dt = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-				return dt !== 0 ? dt : a.id.localeCompare(b.id);
-			});
+			: [...list].sort((a, b) => a.id.localeCompare(b.id));
 
-		// Precompute newest/oldest updatedAt across primaries (unparented
-		// nodes of this type), so each primary's outer-ring angle can be
-		// proportional to its actual time gap from the newest. Linear time:
-		// a freshly-modified node sits next to the hand; a much older one
-		// sits closer to the far side of the dial. Bunches of similarly-aged
-		// items cluster; long gaps leave visible empty arcs.
+		// Primaries = objects that are not orbiting a parent.
 		const primariesByType = sorted.filter((o) => !orbitParentOf.has(o.id));
-		const ringTNewest = primariesByType.length > 0 ? (primariesByType[0].updatedAt ?? 0) : 0;
-		const ringTOldest = primariesByType.length > 0 ? (primariesByType[primariesByType.length - 1].updatedAt ?? 0) : 0;
-		const ringTSpan = ringTNewest - ringTOldest;
 		const floatScale = radius < 1 ? 0.4 : 1.0; // central anchor drifts less
-
-		// Pre-compute primary-agent count + index for ring-distribution when
-		// the user has more than one top-level agent in their store.
-		const primaryCount = isAgentType
-			? sorted.filter((o) => !orbitParentOf.has(o.id)).length
-			: 0;
 
 		for (let i = 0; i < sorted.length; i++) {
 			const obj = sorted[i];
@@ -486,23 +471,13 @@ export function buildCosmos(state, materials) {
 					sCount * 0.45,
 				);
 				// XII (the noon wall) lives at world −Z, theta = −π/2.
-				// Angle is proportional to actual time gap from the newest
-				// sibling: a freshly-spawned subagent sits just clockwise of
-				// the hand, an old one sits just counter-clockwise. Tight
-				// bunches of co-spawned siblings cluster together; long
-				// dormant gaps leave visible empty arcs.
+				// Evenly space siblings around the parent — no time-based clustering.
 				const XII_GAP = Math.PI / 24; // ~7.5° clearance each side
 				let theta;
 				if (sCount <= 1) {
 					theta = -Math.PI / 2 + XII_GAP;
 				} else {
-					// siblings is sorted desc by createdAt, so [0] is newest, [-1] oldest.
-					const tNewest = createdAtOf.get(siblings[0]) ?? 0;
-					const tOldest = createdAtOf.get(siblings[siblings.length - 1]) ?? 0;
-					const tSpan = tNewest - tOldest;
-					const tThis = createdAtOf.get(obj.id) ?? 0;
-					const ageFraction = tSpan > 0 ? (tNewest - tThis) / tSpan : (sIdx / (sCount - 1));
-					theta = -Math.PI / 2 + XII_GAP + ageFraction * (Math.PI * 2 - 2 * XII_GAP);
+					theta = -Math.PI / 2 + XII_GAP + (sIdx / sCount) * (Math.PI * 2 - 2 * XII_GAP);
 				}
 				pos = new THREE.Vector3(
 					parentPos.x + Math.cos(theta) * orbitR,
@@ -515,37 +490,19 @@ export function buildCosmos(state, materials) {
 				orbitAngle = theta;
 				orbitYOffset = jitterY(obj.id) * 0.4;
 			} else {
-				// Primary placement on the type's ring. For 'agent' this is r=0
-				// unless multiple primaries exist, in which case spread them on a
-				// tiny inner ring so they don't stack.
-				const primaryIdx = isAgentType
-					? sorted.filter((o) => !orbitParentOf.has(o.id)).findIndex((o) => o.id === obj.id)
-					: i;
-				const ringCount = isAgentType ? primaryCount : sorted.length;
-			const ringRadius = typeKey === "agent" && primaryCount > 1
-				? 2
-				: Math.max(radius, ringCount * 0.35);
-				// Non-agent outer rings: angle is proportional to actual
-				// time gap from the most-recently-updated primary in this
-				// type's ring. Recently-touched things bunch near the hand;
-				// stale entries spread out and dormant periods leave gaps.
-				// Agents keep the hash-phase from angleFor() since their
-				// multi-primary case is a tiny inner ring where temporal
-				// ordering is moot.
+				// Primary placement on the type's ring. All types use evenly-spaced
+				// hash-phase placement — no time-based clustering.
+				const primaryIdx = primariesByType.indexOf(obj);
+				const ringCount = primariesByType.length;
+				const ringRadius = typeKey === "agent" && ringCount > 1
+					? 2
+					: Math.max(radius, ringCount * 0.35);
 				const XII_GAP_RING = Math.PI / 24;
 				let theta0;
-				if (isAgentType) {
-					theta0 = angleFor(primaryIdx, ringCount, typeKey);
-				} else if (ringCount <= 1 || ringTSpan <= 0) {
-					// Fallback to even spacing when time info is degenerate
-					// (single item, or every primary shares one updatedAt).
-					theta0 = ringCount <= 1
-						? -Math.PI / 2 + XII_GAP_RING
-						: -Math.PI / 2 + XII_GAP_RING + (primaryIdx / (ringCount - 1)) * (Math.PI * 2 - 2 * XII_GAP_RING);
+				if (ringCount <= 1) {
+					theta0 = -Math.PI / 2 + XII_GAP_RING;
 				} else {
-					const tThis = obj.updatedAt ?? 0;
-					const ageFraction = (ringTNewest - tThis) / ringTSpan;
-					theta0 = -Math.PI / 2 + XII_GAP_RING + ageFraction * (Math.PI * 2 - 2 * XII_GAP_RING);
+					theta0 = angleFor(primaryIdx, ringCount, typeKey);
 				}
 				const yJitter = jitterY(obj.id);
 				const baseY = y + yJitter;
