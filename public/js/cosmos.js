@@ -530,35 +530,37 @@ export function buildCosmos(state, materials) {
 				orbitAngle = theta;
 				orbitYOffset = jitterY(obj.id) * 0.4;
 			} else {
-				// Primary: tight bounded cluster around the cell origin.
-				// The previous tangent-plane sub-grid extended sideways
-				// with ITEM_SPACING * subGridCols, which for dense types
-				// (40+ programs, 100+ source files) blew through adjacent
-				// ring slots and turned the ring into a soup. Cluster
-				// radius now grows LOGARITHMICALLY with object count and
-				// is capped so no cell extends more than ~4.5 units in
-				// any direction. Items get a stable hashed offset inside
-				// a ball of that radius, so dense types form a clump at
-				// the type's ring slot rather than a sheet across the ring.
+				// Primary: arrange the cell's objects on concentric mini-
+				// rings in the horizontal plane around the cell origin.
+				// Each ring holds up to ITEMS_PER_RING items spaced
+				// evenly by angle. Extra items spill onto a slightly
+				// larger ring stacked next to the first. Result: every
+				// type cell reads as one or more concentric circles
+				// around its centre — visually echoing the main ring of
+				// types around the giant.
+				const N = primariesByType.length;
 				const primaryIdx = primariesByType.indexOf(obj);
-				const clusterR = Math.min(4.5, 1.2 + Math.log10(1 + primariesByType.length) * 1.4);
-				const theta = hash01(obj.id + "ct") * Math.PI * 2;
-				const phi = Math.acos(1 - 2 * hash01(obj.id + "cp"));
-				const rho = clusterR * Math.cbrt(0.05 + 0.95 * hash01(obj.id + "cr"));
+				const ITEMS_PER_RING = 10;
+				const ringIdx = Math.floor(primaryIdx / ITEMS_PER_RING);
+				const idxInRing = primaryIdx % ITEMS_PER_RING;
+				const itemsInThisRing = Math.min(ITEMS_PER_RING, N - ringIdx * ITEMS_PER_RING);
+				// Inner ring radius depends on item count so a single
+				// item still sits a touch off-centre rather than ON the
+				// cell origin (where the agent's halo / cell marker is).
+				const baseR = N === 1 ? 0 : Math.max(1.4, Math.min(2.0, 0.8 + 0.18 * itemsInThisRing));
+				const ringR = baseR + ringIdx * 1.4;
+				const angleOffset = ringIdx * (Math.PI / ITEMS_PER_RING); // stagger rings so they don't visually rhyme
+				const angle = (idxInRing / itemsInThisRing) * Math.PI * 2 + angleOffset;
+				const yJitter = (hash01(obj.id + "yj") - 0.5) * 0.5;
 				pos = origin.clone().add(new THREE.Vector3(
-					rho * Math.sin(phi) * Math.cos(theta),
-					rho * Math.cos(phi),
-					rho * Math.sin(phi) * Math.sin(theta),
+					Math.cos(angle) * ringR,
+					yJitter,
+					Math.sin(angle) * ringR,
 				));
 				orbitRadius = 0;
 				orbitAngle = 0;
 				orbitCenterY = origin.y;
 				parentId = null;
-				// `primaryIdx` is no longer used for positioning but kept
-				// referenced so eslint doesn't flag it; the orbit-parent
-				// branch above still depends on the same iteration order
-				// for sibling indices.
-				void primaryIdx;
 			}
 
 			// Log-scaled size by change count (floor at 0.5, gentler growth).
