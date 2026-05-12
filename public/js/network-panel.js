@@ -114,9 +114,8 @@ async function postAction(url, body) {
 	);
 
 	const rows = peers.map((p) => {
-		// Trust derives from whether the peer is in our /peer book; v1
-		// surfaces what the directory snapshot reports.
-		const trustLevel = p.peer_object_id ? "trusted" : "discovered";
+		// Trust level comes from /peer program via API merge.
+		const trustLevel = p.trust_level || (p.peer_object_id ? "trusted" : "discovered");
 		const name = (p.agent_name || "(unnamed)").replace(/[<>&]/g, "");
 		const id = shortKey(p.identity_pubkey || p.hyperswarm_pubkey);
 		const suffix = peerSuffix(p.identity_pubkey, p.hyperswarm_pubkey);

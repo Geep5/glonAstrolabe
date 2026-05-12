@@ -135,7 +135,16 @@ app.get("/api/network/status", async (_req, res) => {
 app.get("/api/network/peers", async (_req, res) => {
 	try {
 		const peers = await dispatchToDaemon("/directory", "listDiscovered", []);
-		res.json({ ok: true, peers });
+		const peerList = await dispatchToDaemon("/peer", "list", []);
+		const trustMap = new Map();
+		for (const p of peerList || []) {
+			if (p.identity_pubkey) trustMap.set(p.identity_pubkey.toLowerCase(), p.trust_level);
+		}
+		const merged = (peers || []).map((p: any) => ({
+			...p,
+			trust_level: trustMap.get((p.identity_pubkey || "").toLowerCase()) || "discovered",
+		}));
+		res.json({ ok: true, peers: merged });
 	} catch (err: any) {
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
