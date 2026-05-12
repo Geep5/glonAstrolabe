@@ -24,6 +24,7 @@ import { showPaymentModal } from "./payment-modal.js";
 	import { openAgentChat, initAgentChats } from "./chat.js";
 	import { initMiningToggle } from "./mining-toggle.js";
 	import { initNetworkPanel } from "./network-panel.js";
+	import { initPeerChatPanel } from "./peer-chat-panel.js";
 	import { getRender, setRender, clearRender, applyToMesh, updateOverlays } from "./planet-styles.js";
 	import { initPhysics } from "./physics.js";
 
@@ -79,6 +80,7 @@ const materials = {
 		initAgentChats(agents);
 		initMiningToggle();
 		initNetworkPanel();
+		initPeerChatPanel();
 		setupThree();
 		buildScenes();
 		bindUI();

@@ -960,6 +960,125 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	opacity: 0.65;
 	letter-spacing: 0.02em;
 }
+
+/* ── Peer-chat overlay ────────────────────────────────────────── */
+/* Floats above the scene when openPeerChat() is called. Anchored to the
+ * right edge below the Network panel so it doesn't fight for layout. */
+.peer-chat {
+	position: fixed;
+	right: 12px;
+	bottom: 12px;
+	width: 360px;
+	max-height: 60vh;
+	display: flex;
+	flex-direction: column;
+	background: rgba(12, 14, 22, 0.92);
+	backdrop-filter: blur(8px);
+	border: 1px solid rgba(94, 234, 212, 0.25);
+	border-radius: 8px;
+	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(94, 234, 212, 0.08);
+	z-index: 1000;
+	font-size: 12px;
+}
+.peer-chat[hidden] { display: none; }
+
+.peer-chat-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 10px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.peer-chat-title {
+	font: 11px/14px ui-monospace, monospace;
+	color: #5eead4;
+	letter-spacing: 0.02em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.peer-chat-close {
+	background: none;
+	border: none;
+	color: var(--text-muted);
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 0 4px;
+}
+.peer-chat-close:hover { color: var(--text); }
+
+.peer-chat-messages {
+	list-style: none;
+	margin: 0;
+	padding: 8px 10px;
+	overflow-y: auto;
+	flex: 1 1 auto;
+	min-height: 120px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.peer-chat-empty { padding: 16px 0; text-align: center; }
+
+.peer-chat-msg {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px 9px;
+	border-radius: 8px;
+	max-width: 85%;
+	word-wrap: break-word;
+	overflow-wrap: anywhere;
+}
+.peer-chat-msg-in {
+	background: rgba(255, 255, 255, 0.04);
+	align-self: flex-start;
+	border-bottom-left-radius: 2px;
+}
+.peer-chat-msg-out {
+	background: rgba(94, 234, 212, 0.10);
+	align-self: flex-end;
+	border-bottom-right-radius: 2px;
+}
+.peer-chat-body { color: var(--text); white-space: pre-wrap; }
+.peer-chat-ts { font: 9px/12px ui-monospace, monospace; align-self: flex-end; opacity: 0.55; }
+.peer-chat-kind {
+	font: 9px/12px ui-monospace, monospace;
+	color: #ffc857;
+	margin-right: 4px;
+}
+
+.peer-chat-compose {
+	display: flex;
+	gap: 6px;
+	padding: 8px 10px;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.peer-chat-compose input {
+	flex: 1 1 auto;
+	background: rgba(255, 255, 255, 0.04);
+	border: 1px solid rgba(255, 255, 255, 0.10);
+	border-radius: 6px;
+	color: var(--text);
+	font: 12px/16px var(--font-body, system-ui, sans-serif);
+	padding: 6px 8px;
+	outline: none;
+}
+.peer-chat-compose input:focus { border-color: rgba(94, 234, 212, 0.5); }
+.peer-chat-compose button {
+	background: rgba(94, 234, 212, 0.15);
+	border: 1px solid rgba(94, 234, 212, 0.40);
+	color: #5eead4;
+	border-radius: 6px;
+	padding: 0 12px;
+	cursor: pointer;
+	font-size: 14px;
+}
+.peer-chat-compose button:hover { background: rgba(94, 234, 212, 0.25); }
+.peer-chat-compose button:disabled { opacity: 0.5; cursor: progress; }
+
+.peer-chat-status { padding: 0 10px 6px; color: var(--text-muted); min-height: 14px; }
 .network-action {
 	font: 10px/1 ui-monospace, "SF Mono", monospace;
 	padding: 3px 8px;

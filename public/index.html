@@ -93,6 +93,22 @@
 		<div class="network-footer muted small" id="network-status"></div>
 	</aside>
 
+	<!-- Peer-chat overlay. Floats above the scene when a peered row is
+	     clicked in the Network panel. Open/close state and polling are
+	     managed by peer-chat-panel.js. -->
+	<div id="peer-chat" class="peer-chat" hidden>
+		<header class="peer-chat-header">
+			<span class="peer-chat-title" id="peer-chat-title">Chat</span>
+			<button class="peer-chat-close" id="peer-chat-close" title="Close">×</button>
+		</header>
+		<ul class="peer-chat-messages" id="peer-chat-messages"></ul>
+		<form class="peer-chat-compose" id="peer-chat-compose">
+			<input id="peer-chat-input" type="text" autocomplete="off" placeholder="Say something..." maxlength="8000" />
+			<button type="submit" id="peer-chat-send" title="Send">↩</button>
+		</form>
+		<div class="peer-chat-status muted small" id="peer-chat-status"></div>
+	</div>
+
 	<aside id="inspector">
 		<button class="panel-collapse" data-panel="inspector" title="Collapse">─</button>
 		<div class="inspector-collapsed-summary" id="inspector-summary">

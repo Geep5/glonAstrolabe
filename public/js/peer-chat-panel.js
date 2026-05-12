@@ -1,0 +1,185 @@
+// Peer-chat panel — floating overlay shown when the user clicks a peered
+// row in the Network panel. Polls /api/peer-chat/messages for the open
+// conversation every PEER_CHAT_POLL_MS; posts new messages via
+// /api/peer-chat/send.
+//
+// State is intentionally minimal: one `current` object describing which
+// peer the panel is bound to, plus a `lastSentAt` watermark so polls
+// only fetch new messages. Re-renders the full message list each tick;
+// dedupes by msg_id since outbound messages are echoed locally on send.
+
+const PEER_CHAT_POLL_MS = 2_000;
+
+const PEER_CHAT = document.getElementById("peer-chat");
+const PEER_CHAT_TITLE = document.getElementById("peer-chat-title");
+const PEER_CHAT_MESSAGES = document.getElementById("peer-chat-messages");
+const PEER_CHAT_FORM = document.getElementById("peer-chat-compose");
+const PEER_CHAT_INPUT = document.getElementById("peer-chat-input");
+const PEER_CHAT_SEND = document.getElementById("peer-chat-send");
+const PEER_CHAT_STATUS = document.getElementById("peer-chat-status");
+const PEER_CHAT_CLOSE = document.getElementById("peer-chat-close");
+
+const state = {
+	open: false,
+	identity_pubkey: null,         // hex string identifying the peer
+	display_name: null,
+	messagesById: new Map(),       // msg_id → message; dedup across polls + local echo
+	pollHandle: null,
+	pollInflight: false,
+};
+
+function escapeHtml(s) {
+	return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function shortKey(s) {
+	if (!s || typeof s !== "string") return "";
+	return s.slice(0, 8);
+}
+
+function renderMessages() {
+	const msgs = [...state.messagesById.values()].sort((a, b) => a.sent_at - b.sent_at);
+	if (msgs.length === 0) {
+		PEER_CHAT_MESSAGES.innerHTML = `<li class="peer-chat-empty muted small">No messages yet. Say hello.</li>`;
+		return;
+	}
+	const wasAtBottom = isScrolledToBottom();
+	PEER_CHAT_MESSAGES.innerHTML = msgs.map((m) => {
+		const cls = m.direction === "out" ? "out" : "in";
+		const ts = new Date(m.sent_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+		// kind: "text" is the only thing we render as-text today. Other
+		// kinds (future agent-RPC) show a small tag with the kind name —
+		// so we don't crash on unknown kinds, just label them.
+		let body;
+		if (m.kind === "text") {
+			body = escapeHtml(String(m.body ?? ""));
+		} else {
+			body = `<span class="peer-chat-kind">[${escapeHtml(String(m.kind))}]</span> <code>${escapeHtml(JSON.stringify(m.body))}</code>`;
+		}
+		return `<li class="peer-chat-msg peer-chat-msg-${cls}"><span class="peer-chat-body">${body}</span><span class="peer-chat-ts muted">${ts}</span></li>`;
+	}).join("");
+	if (wasAtBottom) scrollToBottom();
+}
+
+function isScrolledToBottom() {
+	const el = PEER_CHAT_MESSAGES;
+	if (!el) return true;
+	return (el.scrollHeight - el.scrollTop - el.clientHeight) < 40;
+}
+function scrollToBottom() {
+	if (PEER_CHAT_MESSAGES) PEER_CHAT_MESSAGES.scrollTop = PEER_CHAT_MESSAGES.scrollHeight;
+}
+
+async function poll() {
+	if (!state.open || !state.identity_pubkey) return;
+	if (state.pollInflight) return;
+	state.pollInflight = true;
+	try {
+		const res = await fetch(`/api/peer-chat/messages?identity_pubkey=${encodeURIComponent(state.identity_pubkey)}`);
+		const json = await res.json().catch(() => null);
+		if (!res.ok || json?.ok === false) {
+			PEER_CHAT_STATUS.textContent = json?.error ? `poll error: ${json.error}` : `HTTP ${res.status}`;
+			return;
+		}
+		PEER_CHAT_STATUS.textContent = "";
+		let changed = false;
+		for (const m of json.messages ?? []) {
+			if (!state.messagesById.has(m.msg_id)) {
+				state.messagesById.set(m.msg_id, m);
+				changed = true;
+			}
+		}
+		if (changed) renderMessages();
+		// Mark read so the unread badge can clear on the daemon side.
+		// Best-effort; ignore failures.
+		fetch("/api/peer-chat/mark-read", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ identity_pubkey: state.identity_pubkey }),
+		}).catch(() => {});
+	} catch (err) {
+		PEER_CHAT_STATUS.textContent = `network: ${err?.message ?? String(err)}`;
+	} finally {
+		state.pollInflight = false;
+	}
+}
+
+async function sendMessage(text) {
+	if (!state.identity_pubkey || !text) return;
+	PEER_CHAT_SEND.disabled = true;
+	PEER_CHAT_INPUT.disabled = true;
+	PEER_CHAT_STATUS.textContent = "sending...";
+	try {
+		const res = await fetch("/api/peer-chat/send", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ identity_pubkey: state.identity_pubkey, text }),
+		});
+		const json = await res.json().catch(() => null);
+		if (!res.ok || json?.ok === false) {
+			PEER_CHAT_STATUS.textContent = json?.error || `send failed (HTTP ${res.status})`;
+			return false;
+		}
+		PEER_CHAT_STATUS.textContent = "";
+		// Daemon records the outbound message in its own conversation log,
+		// so the next poll will pick it up. No need to optimistically insert.
+		poll();
+		return true;
+	} catch (err) {
+		PEER_CHAT_STATUS.textContent = `network: ${err?.message ?? String(err)}`;
+		return false;
+	} finally {
+		PEER_CHAT_SEND.disabled = false;
+		PEER_CHAT_INPUT.disabled = false;
+		PEER_CHAT_INPUT.focus();
+	}
+}
+
+export function openPeerChat({ identity_pubkey, display_name }) {
+	if (!PEER_CHAT) return;
+	if (!identity_pubkey) {
+		console.warn("[peer-chat] openPeerChat: identity_pubkey required");
+		return;
+	}
+	// If switching peers, clear the buffer so old messages don't bleed in.
+	if (state.identity_pubkey !== identity_pubkey) {
+		state.messagesById = new Map();
+	}
+	state.identity_pubkey = identity_pubkey;
+	state.display_name = display_name || "(unnamed)";
+	state.open = true;
+	const suffix = shortKey(identity_pubkey);
+	PEER_CHAT_TITLE.textContent = `${state.display_name} · ${suffix}`;
+	PEER_CHAT.hidden = false;
+	renderMessages();
+	if (state.pollHandle) clearInterval(state.pollHandle);
+	state.pollHandle = setInterval(poll, PEER_CHAT_POLL_MS);
+	poll();
+	setTimeout(() => PEER_CHAT_INPUT.focus(), 0);
+}
+
+export function closePeerChat() {
+	state.open = false;
+	if (state.pollHandle) { clearInterval(state.pollHandle); state.pollHandle = null; }
+	if (PEER_CHAT) PEER_CHAT.hidden = true;
+}
+
+export function initPeerChatPanel() {
+	if (!PEER_CHAT) return;
+	PEER_CHAT_CLOSE?.addEventListener("click", closePeerChat);
+	PEER_CHAT_FORM?.addEventListener("submit", async (e) => {
+		e.preventDefault();
+		const text = PEER_CHAT_INPUT.value.trim();
+		if (!text) return;
+		PEER_CHAT_INPUT.value = "";
+		const ok = await sendMessage(text);
+		if (!ok) {
+			// Put text back so the user can retry.
+			PEER_CHAT_INPUT.value = text;
+		}
+	});
+	// ESC closes the panel when focused inside it.
+	PEER_CHAT.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") closePeerChat();
+	});
+}

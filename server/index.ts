@@ -182,6 +182,65 @@ app.post("/api/network/announce", async (_req, res) => {
 	}
 });
 
+// ── Peer-chat: agent-to-agent text messaging ────────────────────────
+//
+// Mirrors /peer-chat typed actions. The Network panel opens a chat panel
+// when the user clicks a `peered` row; the panel polls messages and posts
+// new ones through these endpoints.
+
+app.get("/api/peer-chat/conversations", async (_req, res) => {
+	try {
+		const conversations = await dispatchToDaemon("/peer-chat", "listConversations", []);
+		res.json({ ok: true, conversations });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.get("/api/peer-chat/messages", async (req, res) => {
+	// Query: ?identity_pubkey=...&since=...&limit=...
+	try {
+		const input: Record<string, unknown> = {};
+		if (typeof req.query.identity_pubkey === "string") input.identity_pubkey = req.query.identity_pubkey;
+		if (typeof req.query.peer_id === "string") input.peer_id = req.query.peer_id;
+		if (typeof req.query.since === "string") {
+			const n = Number(req.query.since);
+			if (Number.isFinite(n)) input.since = n;
+		}
+		if (typeof req.query.limit === "string") {
+			const n = Number(req.query.limit);
+			if (Number.isFinite(n)) input.limit = n;
+		}
+		const messages = await dispatchToDaemon("/peer-chat", "listMessages", [input]);
+		res.json({ ok: true, messages });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/peer-chat/send", async (req, res) => {
+	// Body: { identity_pubkey?: string, peer_id?: string, display_name?: string, text: string, in_reply_to?: string|null }
+	try {
+		const result = await dispatchToDaemon("/peer-chat", "send", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		// Distinguish trust-gate refusals (user-fixable) from swarm timeouts
+		// so the UI can show a useful message.
+		const msg = err?.message ?? String(err);
+		const status = /trust|peered|peer matches/i.test(msg) ? 400 : 503;
+		res.status(status).json({ ok: false, error: msg });
+	}
+});
+
+app.post("/api/peer-chat/mark-read", async (req, res) => {
+	try {
+		const result = await dispatchToDaemon("/peer-chat", "markRead", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
 // Inject an object into an agent's context: post a user_text via /agent ask
 // describing the object. Triggers one assistant turn but the reference stays
 // in context for every subsequent turn until the next compaction.

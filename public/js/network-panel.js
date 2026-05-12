@@ -2,7 +2,9 @@
 //
 // Polls /api/network/{status,peers,requests} every NETWORK_POLL_MS,
 // renders to #network-list and #network-requests, wires "Peer with",
-// "Accept", and "Decline" buttons to the matching POST endpoints.
+// "Accept", "Decline", and "Chat" buttons to the matching endpoints.
+
+import { openPeerChat } from "./peer-chat-panel.js";
 
 const POLL_MS = 5_000;
 const NETWORK_LIST = document.getElementById("network-list");
@@ -117,7 +119,10 @@ async function refresh() {
 		const hpLower = (p.hyperswarm_pubkey || "").toLowerCase();
 		let action;
 		if (trustLevel === "trusted") {
-			action = `<button class="network-action muted" disabled>peered</button>`;
+			// Peered → button opens chat. Click handled in bindClicks via
+			// data-action="chat"; the row itself is also clickable to make
+			// the affordance feel less hidden.
+			action = `<button class="network-action" data-action="chat" data-identity="${p.identity_pubkey ?? ""}" data-name="${name}">chat</button>`;
 		} else if (outgoingPending.has(hpLower)) {
 			action = `<button class="network-action muted" disabled>sent · waiting</button>`;
 		} else {
@@ -174,6 +179,13 @@ function bindClicks() {
 			} else if (action === "decline") {
 				await postAction(`/api/network/requests/${encodeURIComponent(btn.dataset.id)}/decline`);
 				setTimeout(refresh, 250);
+			} else if (action === "chat") {
+				// Open the peer-chat overlay for this trusted peer.
+				openPeerChat({
+					identity_pubkey: btn.dataset.identity,
+					display_name: btn.dataset.name,
+				});
+				btn.disabled = false; // chat button shouldn't lock out
 			}
 		} catch (err) {
 			console.warn("[network] action failed:", err?.message ?? err);
