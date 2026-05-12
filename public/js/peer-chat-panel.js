@@ -38,7 +38,7 @@ function shortKey(s) {
 }
 
 function renderMessages() {
-	const msgs = [...state.messagesById.values()].sort((a, b) => a.sent_at - b.sent_at);
+	const msgs = [...state.messagesById.values()].sort((a, b) => (a.sent_at || 0) - (b.sent_at || 0));
 	if (msgs.length === 0) {
 		PEER_CHAT_MESSAGES.innerHTML = `<li class="peer-chat-empty muted small">No messages yet. Say hello.</li>`;
 		return;
@@ -46,10 +46,10 @@ function renderMessages() {
 	const wasAtBottom = isScrolledToBottom();
 	PEER_CHAT_MESSAGES.innerHTML = msgs.map((m) => {
 		const cls = m.direction === "out" ? "out" : "in";
-		const ts = new Date(m.sent_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-		// kind: "text" is the only thing we render as-text today. Other
-		// kinds (future agent-RPC) show a small tag with the kind name —
-		// so we don't crash on unknown kinds, just label them.
+		const tsRaw = m.sent_at ? new Date(m.sent_at) : null;
+		const ts = tsRaw && !isNaN(tsRaw.getTime())
+			? tsRaw.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+			: "";
 		let body;
 		if (m.kind === "text") {
 			body = escapeHtml(String(m.body ?? ""));
@@ -109,6 +109,18 @@ async function sendMessage(text) {
 	PEER_CHAT_SEND.disabled = true;
 	PEER_CHAT_INPUT.disabled = true;
 	PEER_CHAT_STATUS.textContent = "sending...";
+	// Optimistically insert so the user sees immediate feedback.
+	const tmpId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+	const optimistic = {
+		msg_id: tmpId,
+		direction: "out",
+		kind: "text",
+		in_reply_to: null,
+		body: text,
+		sent_at: Date.now(),
+	};
+	state.messagesById.set(tmpId, optimistic);
+	renderMessages();
 	try {
 		const res = await fetch("/api/peer-chat/send", {
 			method: "POST",
@@ -118,15 +130,27 @@ async function sendMessage(text) {
 		const json = await res.json().catch(() => null);
 		if (!res.ok || json?.ok === false) {
 			PEER_CHAT_STATUS.textContent = json?.error || `send failed (HTTP ${res.status})`;
+			state.messagesById.delete(tmpId);
+			renderMessages();
 			return false;
 		}
 		PEER_CHAT_STATUS.textContent = "";
-		// Daemon records the outbound message in its own conversation log,
-		// so the next poll will pick it up. No need to optimistically insert.
+		// Replace the optimistic placeholder with the real msg_id so the
+		// next poll doesn't create a duplicate.
+		if (json?.result?.msg_id) {
+			state.messagesById.delete(tmpId);
+			state.messagesById.set(json.result.msg_id, {
+				...optimistic,
+				msg_id: json.result.msg_id,
+			});
+			renderMessages();
+		}
 		poll();
 		return true;
 	} catch (err) {
 		PEER_CHAT_STATUS.textContent = `network: ${err?.message ?? String(err)}`;
+		state.messagesById.delete(tmpId);
+		renderMessages();
 		return false;
 	} finally {
 		PEER_CHAT_SEND.disabled = false;
