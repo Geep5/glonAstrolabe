@@ -1218,76 +1218,114 @@ export function buildCosmos(state, materials) {
 	}
 
 	// ── Conversation nodes ────────────────────────────────────────
-	// One node per active /peer-chat conversation that involves an agent
-	// (which is all of them in v1; once envelopes carry from_subentity_id
-	// we can distinguish human↔human and SKIP those because they're the
-	// sun-to-sun relationship). Each node sits between the local sun and
-	// the participant's position; brightness pulses with recency.
+	// One node per active conversation. Today all /peer-chat traffic is
+	// principal-level (this glon ↔ that glon), so every node represents
+	// a SUN-TO-SUN (human ↔ human) channel — rendered yellow/warm to
+	// match the suns themselves. When envelopes start carrying
+	// from_subentity_id, agent-involved conversations will spawn
+	// additional nodes with their own visual treatment (e.g. teal for
+	// agent↔agent, mixed for human↔agent).
 	//
-	// updateConversations is called from main.js's polling loop with the
-	// payload of /api/peer-chat/conversations. We add/update/remove
-	// meshes diff-style so the GPU upload is minimal between ticks.
-	const conversationNodes = new Map(); // peer_object_id → { mesh, glowLine }
+	// Crucial invariant: the convo node ALWAYS renders, even when the
+	// peer's sun isn't visible in the scene (peer offline, no /peer
+	// record yet, peer record but no identity_pubkey). The node is the
+	// affordance to open the chat — it can't be gated on the peer being
+	// drawable. When peer position is known the node points toward it;
+	// otherwise it sits at a stable hash-derived angle around the local
+	// sun.
+	//
+	// updateConversations is called from main.js polling. Add/update/
+	// reap diff-style so GPU upload between ticks is minimal.
+	const CONVO_RADIUS = 9;        // distance from local sun to the convo node
+	const CONVO_Y      = 2.2;      // slightly above belly to distinguish from agent ring
+	function convoAngle(conv, peerPos) {
+		// Prefer peer's actual outer-ring angle so the convo node points
+		// in their direction. Falls back to a deterministic hash of the
+		// peer's identity so position is stable across reloads even when
+		// the peer isn't rendered.
+		if (peerPos && (peerPos.x !== 0 || peerPos.z !== 0)) {
+			return Math.atan2(peerPos.z, peerPos.x);
+		}
+		const key = conv.peer_identity_pubkey || conv.peer_object_id || conv.peer_display_name || "";
+		return hash01("convo:" + key) * Math.PI * 2;
+	}
+	const conversationNodes = new Map(); // key → { mesh, glowLine }
 	function updateConversations(conversations) {
 		const seen = new Set();
 		const conv_list = Array.isArray(conversations) ? conversations : [];
 		for (const conv of conv_list) {
-			// Position: midway between origin (local sun) and the peer's
-			// outer-ring slot. Slightly elevated so the convo node floats
-			// above the belly plane and reads as a distinct body.
-			const peerKey = conv.peer_object_id;
-			const peerPos = peerKey ? primaryRingPosition.get(peerKey) : null;
-			if (!peerPos) continue;                       // peer not on outer ring yet
-			seen.add(peerKey);
-			const mid = peerPos.clone().multiplyScalar(0.5);
-			mid.y = 1.4;
-			let entry = conversationNodes.get(peerKey);
+			// Stable key: prefer identity_pubkey (the cryptographic
+			// identity), fall back to peer_object_id or display name.
+			const key = conv.peer_identity_pubkey || conv.peer_object_id || conv.peer_display_name;
+			if (!key) continue;
+			seen.add(key);
+			const peerPos = conv.peer_object_id ? primaryRingPosition.get(conv.peer_object_id) : null;
+			const angle = convoAngle(conv, peerPos);
+			const nodePos = new THREE.Vector3(
+				Math.cos(angle) * CONVO_RADIUS,
+				CONVO_Y,
+				Math.sin(angle) * CONVO_RADIUS,
+			);
+			let entry = conversationNodes.get(key);
 			if (!entry) {
-				const geo = new THREE.SphereGeometry(0.55, 24, 16);
+				const geo = new THREE.SphereGeometry(0.7, 24, 16);
 				const mat = new THREE.MeshStandardMaterial({
 					color: 0x000000,
-					emissive: 0xff9f43,
-					emissiveIntensity: 1.0,
+					emissive: 0xffc66b,        // warm yellow — sun-channel color
+					emissiveIntensity: 1.2,
 					toneMapped: false,
 				});
 				const mesh = new THREE.Mesh(geo, mat);
 				mesh.userData = {
 					kind: "conversation",
-					peer_object_id: peerKey,
-					peer_identity_pubkey: conv.peer_identity_pubkey,
-					peer_display_name: conv.peer_display_name,
+					channel: "sun-to-sun",     // future: "agent-to-agent" | "human-to-agent"
+					peer_object_id: conv.peer_object_id ?? null,
+					peer_identity_pubkey: conv.peer_identity_pubkey ?? null,
+					peer_display_name: conv.peer_display_name ?? "",
 				};
 				group.add(mesh);
-				// Connector lines: sun → convo, convo → peer. Thin and
-				// dim; they brighten with recent activity via the tick.
+				// Two-segment connector: sun → node → peer (or just sun
+				// → node when the peer isn't drawable).
 				const lineGeo = new THREE.BufferGeometry();
-				const linePos = new Float32Array(6 * 2); // 4 points = 2 line segments
+				const linePos = new Float32Array(12);
 				lineGeo.setAttribute("position", new THREE.BufferAttribute(linePos, 3));
 				const lineMat = new THREE.LineBasicMaterial({
-					color: 0xff9f43,
+					color: 0xffc66b,
 					transparent: true,
-					opacity: 0.35,
+					opacity: 0.4,
 				});
 				const glowLine = new THREE.LineSegments(lineGeo, lineMat);
-				glowLine.userData = { kind: "conversation-link", peer_object_id: peerKey };
+				glowLine.userData = { kind: "conversation-link", peer_identity_pubkey: conv.peer_identity_pubkey };
 				group.add(glowLine);
 				entry = { mesh, glowLine };
-				conversationNodes.set(peerKey, entry);
+				conversationNodes.set(key, entry);
 			}
-			entry.mesh.position.copy(mid);
-			entry.mesh.userData.peer_display_name = conv.peer_display_name;
-			entry.mesh.userData.peer_identity_pubkey = conv.peer_identity_pubkey;
+			entry.mesh.position.copy(nodePos);
+			entry.mesh.userData.peer_display_name = conv.peer_display_name ?? "";
+			entry.mesh.userData.peer_identity_pubkey = conv.peer_identity_pubkey ?? null;
+			entry.mesh.userData.peer_object_id = conv.peer_object_id ?? null;
 			// Recency pulse: brighter for messages in the last 10 minutes.
 			const ageS = (Date.now() - (conv.last_message_at || 0)) / 1000;
 			const recency = Math.max(0, Math.min(1, 1 - ageS / 600));
-			entry.mesh.material.emissiveIntensity = 0.5 + 1.6 * recency;
-			entry.glowLine.material.opacity = 0.25 + 0.5 * recency;
-			// Refresh connector line endpoints (in case peer moved).
+			entry.mesh.material.emissiveIntensity = 0.7 + 1.5 * recency;
+			entry.glowLine.material.opacity = 0.30 + 0.45 * recency;
+			// Refresh connector: sun → node, then node → peer (if known)
+			// or node → node-extension (so the line still has two visible
+			// segments and the geometry buffer stays a stable size).
 			const arr = entry.glowLine.geometry.attributes.position.array;
-			arr[0] = 0;            arr[1] = RING_Y;   arr[2] = 0;        // sun
-			arr[3] = mid.x;        arr[4] = mid.y;    arr[5] = mid.z;    // convo (segment end)
-			arr[6] = mid.x;        arr[7] = mid.y;    arr[8] = mid.z;    // convo (segment start)
-			arr[9] = peerPos.x;    arr[10] = peerPos.y; arr[11] = peerPos.z; // peer
+			arr[0] = 0;            arr[1] = RING_Y;     arr[2] = 0;          // sun
+			arr[3] = nodePos.x;    arr[4] = nodePos.y;  arr[5] = nodePos.z;  // convo node (end of segment 1)
+			arr[6] = nodePos.x;    arr[7] = nodePos.y;  arr[8] = nodePos.z;  // convo node (start of segment 2)
+			if (peerPos) {
+				arr[9]  = peerPos.x; arr[10] = peerPos.y; arr[11] = peerPos.z;  // peer
+			} else {
+				// Peer not drawable — extend a short stub in the convo
+				// node's angular direction so the line reads as "headed
+				// off to an offstage participant" rather than collapsing.
+				arr[9]  = Math.cos(angle) * (CONVO_RADIUS + 6);
+				arr[10] = CONVO_Y;
+				arr[11] = Math.sin(angle) * (CONVO_RADIUS + 6);
+			}
 			entry.glowLine.geometry.attributes.position.needsUpdate = true;
 		}
 		// Reap dropped conversations.
