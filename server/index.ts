@@ -41,6 +41,11 @@ app.get("/api/meta", (_req, res) => {
 app.get("/api/state", (_req, res) => {
 	res.json(snapshot());
 });
+app.get("/api/agents", (_req, res) => {
+	const s = snapshot();
+	const agents = (s.objects ?? []).filter((o: any) => o.typeKey === "agent");
+	res.json({ agents });
+});
 
 app.get("/api/objects/:id", (req, res) => {
 	const detail = getObjectDetail(req.params.id);

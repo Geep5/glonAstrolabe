@@ -5,6 +5,7 @@
 // "Accept", "Decline", and "Chat" buttons to the matching endpoints.
 
 import { openPeerChat } from "./peer-chat-panel.js";
+import { openAgentChat } from "./chat.js";
 
 const POLL_MS = 5_000;
 const NETWORK_LIST = document.getElementById("network-list");
@@ -45,23 +46,26 @@ async function postAction(url, body) {
 	return json;
 }
 
-async function refresh() {
-	let status = null;
-	let peers = [];
-	let requests = [];
-	let unreachable = false;
-	try {
-		const [s, p, r] = await Promise.all([
-			fetch("/api/network/status").then((res) => res.json()),
-			fetch("/api/network/peers").then((res) => res.json()),
-			fetch("/api/network/requests").then((res) => res.json()),
-		]);
-		status = s?.status ?? null;
-		peers = Array.isArray(p?.peers) ? p.peers : [];
-		requests = Array.isArray(r?.requests) ? r.requests : [];
-	} catch {
-		unreachable = true;
-	}
+	async function refresh() {
+		let status = null;
+		let peers = [];
+		let requests = [];
+		let agents = [];
+		let unreachable = false;
+		try {
+			const [s, p, r, a] = await Promise.all([
+				fetch("/api/network/status").then((res) => res.json()),
+				fetch("/api/network/peers").then((res) => res.json()),
+				fetch("/api/network/requests").then((res) => res.json()),
+				fetch("/api/agents").then((res) => res.json()),
+			]);
+			status = s?.status ?? null;
+			peers = Array.isArray(p?.peers) ? p.peers : [];
+			requests = Array.isArray(r?.requests) ? r.requests : [];
+			agents = Array.isArray(a?.agents) ? a.agents : [];
+		} catch {
+			unreachable = true;
+		}
 
 	// Pending incoming requests get a yellow inline strip above the peer list.
 	const pendingIncoming = requests.filter((q) => q.direction === "incoming" && q.status === "waiting");
@@ -134,8 +138,20 @@ async function refresh() {
 			${action}
 		</li>`;
 	}).join("");
-	NETWORK_LIST.innerHTML = selfRow + rows;
-	NETWORK_COUNT.textContent = peers.length ? String(peers.length) : "";
+
+	// Local agents (e.g. Graice) — always chat-able.
+	const agentRows = agents.map((a) => {
+		const name = (a.name || "(unnamed)").replace(/[<>&]/g, "");
+		const id = shortKey(a.id);
+		return `<li class="network-row local">
+			<span class="network-dot live"></span>
+			<span class="network-name" title="${a.id}">${name}<span class="peer-suffix">·${id}</span></span>
+			<button class="network-action" data-action="agent-chat" data-agent-id="${a.id}" data-name="${name}">chat</button>
+		</li>`;
+	}).join("");
+
+	NETWORK_LIST.innerHTML = selfRow + agentRows + rows;
+	NETWORK_COUNT.textContent = (peers.length + agents.length) ? String(peers.length + agents.length) : "";
 
 	if (unreachable) {
 		NETWORK_STATUS.textContent = "swarm offline (start daemon with GLON_SWARM=1)";
@@ -186,6 +202,10 @@ function bindClicks() {
 					display_name: btn.dataset.name,
 				});
 				btn.disabled = false; // chat button shouldn't lock out
+			} else if (action === "agent-chat") {
+				// Open the regular agent chat window for a local agent.
+				openAgentChat(btn.dataset.agentId, btn.dataset.name);
+				btn.disabled = false;
 			}
 		} catch (err) {
 			console.warn("[network] action failed:", err?.message ?? err);
