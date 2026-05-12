@@ -540,8 +540,6 @@ export function buildCosmos(state, materials) {
 	let prevRadius = 0;
 	for (const [, ids] of sortedBuckets) {
 		const N = ids.length;
-		// Radius needed to fit N items at MIN_ARC_SPACING:
-		//   2πR / N ≥ MIN_ARC_SPACING  →  R ≥ (N × MIN_ARC_SPACING) / (2π)
 		const spacingFloor = N <= 1 ? 0 : (N * MIN_ARC_SPACING) / (2 * Math.PI);
 		const gapFloor = prevRadius + MIN_RING_GAP;
 		const radius = Math.max(MIN_INNER_RADIUS, spacingFloor, gapFloor);
@@ -549,18 +547,67 @@ export function buildCosmos(state, materials) {
 		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
 		prevRadius = radius;
 	}
-	// Network peers always live BEYOND the local content rings — the
-	// "them" band. Three constraints, take the largest:
-	//   - OUTER_PEER_RADIUS         (semantic floor, 44)
-	//   - prevRadius + PEER_VOID_GAP (clear void after local content)
-	//   - spacingFloor              (room for the peers' own count)
-	// PEER_VOID_GAP (30) is far bigger than MIN_RING_GAP (3) on purpose:
-	// peers aren't part of my ecosystem, so the gap reads as cosmic
-	// void rather than just another ring separation.
+	const localOuterRadius = prevRadius;     // outermost LOCAL content ring
+
+	// Anchor spiral: walk the chain once here, cap visible anchors at
+	// MAX_VISIBLE_ANCHORS, and prune byType.get("chain.anchor") down to
+	// just the renderable head so the main render loop doesn't allocate
+	// meshes/bodies for thousands of off-screen historical anchors.
+	const MAX_VISIBLE_ANCHORS = 120;
+	const allAnchors = (byType.get("chain.anchor") ?? []).filter((o) => !o.deleted);
+	const anchorChain = [];
+	let renderableChain = [];
+	if (allAnchors.length > 0) {
+		const anchorById = new Map(allAnchors.map((a) => [a.id, a]));
+		const seen = new Set();
+		let head = allAnchors.find((a) => {
+			const prev = a.scalars?.previous_anchor;
+			return !prev || !anchorById.has(String(prev));
+		});
+		if (!head) {
+			head = [...allAnchors].sort((a, b) => Number(a.scalars?.height ?? 0) - Number(b.scalars?.height ?? 0))[0];
+		}
+		const nextOf = new Map();
+		for (const a of allAnchors) {
+			const prev = String(a.scalars?.previous_anchor ?? "");
+			if (prev && anchorById.has(prev)) nextOf.set(prev, a.id);
+		}
+		let curId = head?.id;
+		while (curId && !seen.has(curId)) {
+			seen.add(curId);
+			const a = anchorById.get(curId);
+			if (!a) break;
+			anchorChain.push(a);
+			curId = nextOf.get(curId);
+		}
+		// Append unvisited (orphans / broken links) so they don't disappear silently.
+		for (const a of allAnchors) {
+			if (!seen.has(a.id)) anchorChain.push(a);
+		}
+		renderableChain = anchorChain.slice(-MAX_VISIBLE_ANCHORS);
+		// Prune byType so the main render loop only creates meshes for
+		// the visible head of the chain. Off-screen anchors are still
+		// in the DAG; the chain itself is just historical now.
+		byType.set("chain.anchor", renderableChain);
+	}
+	// Compact ribbon: cap total radial growth at 2 units so the spiral
+	// is a narrow band, not a sprawling coil.
+	const anchorRadialSpan = 2;
+	const anchorRingStart = localOuterRadius + MIN_RING_GAP + 1.5;
+	const visibleAnchorCount = renderableChain.length;
+	const anchorRingEnd = anchorRingStart + (visibleAnchorCount > 1 ? anchorRadialSpan : 0);
+	// `outerLayerRadius` = the radius of the OUTERMOST visible thing
+	// rendered around the sun (the anchor ribbon). Peer band sits beyond
+	// this so remote glons always render outside ALL local content.
+	const outerLayerRadius = anchorRingEnd;
+
+	// Network peers always live BEYOND the entire local layer (rings
+	// AND anchor halo). Reads as truly "out there" — another ecosystem
+	// across an empty void.
 	if (networkPeerIds.length > 0) {
 		const N = networkPeerIds.length;
 		const spacingFloor = N <= 1 ? 0 : (N * MIN_ARC_SPACING) / (2 * Math.PI);
-		const voidFloor = prevRadius + PEER_VOID_GAP;
+		const voidFloor = outerLayerRadius + PEER_VOID_GAP;
 		const radius = Math.max(OUTER_PEER_RADIUS, voidFloor, spacingFloor);
 		const positions = placeOnRing(networkPeerIds, radius);
 		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
@@ -874,52 +921,22 @@ export function buildCosmos(state, materials) {
 		v.orbitCenterY = 0;
 
 	}
-	// Anchor chain: arrange anchors in a flat outward ring.
-	const anchors = state.objects.filter((o) => o.typeKey === "chain.anchor");
-	const anchorChain = [];
-	if (anchors.length > 0) {
-		const anchorById = new Map(anchors.map((a) => [a.id, a]));
-		const seen = new Set();
-		// Find genesis (no previous_anchor or previous_anchor not in our set)
-		let head = anchors.find((a) => {
-			const prev = a.scalars?.previous_anchor;
-			return !prev || !anchorById.has(String(prev));
-		});
-		if (!head) {
-			head = [...anchors].sort((a, b) => Number(a.scalars?.height ?? 0) - Number(b.scalars?.height ?? 0))[0];
-		}
-		// Walk forward by building a next-map from previous_anchor
-		const nextOf = new Map();
-		for (const a of anchors) {
-			const prev = String(a.scalars?.previous_anchor ?? "");
-			if (prev && anchorById.has(prev)) nextOf.set(prev, a.id);
-		}
-		let curId = head?.id;
-		while (curId && !seen.has(curId)) {
-			seen.add(curId);
-			const a = anchorById.get(curId);
-			if (!a) break;
-			anchorChain.push(a);
-			curId = nextOf.get(curId);
-		}
-		// Append any unvisited anchors (orphans / broken links) so they don't
-		// sit on the outer TYPE_LAYOUT ring at radius 22.
-		for (const a of anchors) {
-			if (!seen.has(a.id)) anchorChain.push(a);
-		}
-
-		// Anchor spiral forms a halo OUTSIDE the outermost concentric
-		// ring. outerRingRadius is the actual (post-growth) radius of
-		// the last content ring; the spiral starts just beyond that so
-		// adding inner content automatically pushes the anchor halo
-		// out instead of letting it collide with grown rings.
-		const gridOuterRadius = outerRingRadius + 4;
-		const anchorGap = Math.min(4.0, Math.max(2.0, 1.5 + anchors.length * 0.1));
-		const R0 = gridOuterRadius + anchorGap;
-		const DR = anchors.length > 1 ? Math.max(0.003, 2.5 / anchors.length) : 0;
-		const DTHETA = 0.04;
-		for (let i = 0; i < anchorChain.length; i++) {
-			const obj = anchorChain[i];
+	// Anchor spiral: chain was walked + pruned earlier (up where peer-
+	// band placement needed the outer-extent). Here we just lay out
+	// the renderable head on the pre-computed ring band:
+	//   - Only the NEWEST MAX_VISIBLE_ANCHORS (chain-head) are visible.
+	//     Older history still lives in the DAG; just not rendered as
+	//     individual spheres.
+	//   - DTHETA tuned so visible anchors span ~2 turns regardless of
+	//     count → a compact ribbon, not a sprawling coil.
+	if (renderableChain.length > 0) {
+		const renderN = renderableChain.length;
+		const totalSweep = renderN > 1 ? Math.PI * 4 : 0;   // ~2 turns
+		const DTHETA = renderN > 1 ? totalSweep / (renderN - 1) : 0;
+		const DR = renderN > 1 ? anchorRadialSpan / (renderN - 1) : 0;
+		const R0 = anchorRingStart;
+		for (let i = 0; i < renderableChain.length; i++) {
+			const obj = renderableChain[i];
 			const node = nodes.get(obj.id);
 			if (!node) continue;
 			const theta = i * DTHETA + 0.3;
@@ -931,7 +948,7 @@ export function buildCosmos(state, materials) {
 			if (node.halo) node.halo.position.copy(pos);
 			node.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
 			// Head anchor (newest) gets a size + glow boost so the chain tip is obvious.
-			if (i === anchorChain.length - 1) {
+			if (i === renderableChain.length - 1) {
 				node.mesh.scale.multiplyScalar(1.6);
 				visuals.get(obj.id).baseRadius *= 1.6;
 				if (node.mesh.material.emissiveIntensity !== undefined) {
@@ -978,11 +995,15 @@ export function buildCosmos(state, materials) {
 		linkMeshes.push(mesh);
 	}
 
-	// Anchor chain: single cheap line instead of 1,700 TubeGeometry meshes.
-	if (anchorChain.length > 1) {
-		const chainPositions = new Float32Array(anchorChain.length * 3);
-		for (let i = 0; i < anchorChain.length; i++) {
-			const p = positions.get(anchorChain[i].id);
+	// Anchor chain-line: walks only the renderable head of the chain
+	// (positions outside this set were never assigned, so the line
+	// would emit NaN for them). Visualises the recent history as a
+	// single line through the ribbon.
+	if (renderableChain.length > 1) {
+		const chainPositions = new Float32Array(renderableChain.length * 3);
+		for (let i = 0; i < renderableChain.length; i++) {
+			const p = positions.get(renderableChain[i].id);
+			if (!p) continue;
 			chainPositions[i * 3] = p.x;
 			chainPositions[i * 3 + 1] = p.y;
 			chainPositions[i * 3 + 2] = p.z;
@@ -1000,12 +1021,12 @@ export function buildCosmos(state, materials) {
 		group.add(chainLine);
 
 		// Update the line positions each frame by hooking into the existing tick.
-		// We stash a reference so tick() can update it without regenerating geometry.
 		chainLine.userData.update = () => {
 			const posAttr = chainLine.geometry.attributes.position;
 			const arr = posAttr.array;
-			for (let i = 0; i < anchorChain.length; i++) {
-				const p = positions.get(anchorChain[i].id);
+			for (let i = 0; i < renderableChain.length; i++) {
+				const p = positions.get(renderableChain[i].id);
+				if (!p) continue;
 				arr[i * 3] = p.x;
 				arr[i * 3 + 1] = p.y;
 				arr[i * 3 + 2] = p.z;
