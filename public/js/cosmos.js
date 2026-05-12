@@ -457,15 +457,20 @@ export function buildCosmos(state, materials) {
 	// "TestPeer", etc.). Network peers are pinned to OUTER_PEER_RADIUS so
 	// they always sit beyond the local content rings, regardless of how
 	// many there are — they're conceptually "them," not "me."
+	// The astrolabe snapshot projects each object's fields into a plain
+	// `scalars` object (string values), distinct from the raw DAG
+	// `fields` shape (with stringValue wrappers). Cosmos reads via
+	// `obj.scalars` everywhere else — these helpers had been written
+	// against the raw `fields` shape and silently returned defaults,
+	// which is why no network peer was getting the sun/moon treatment.
 	function isNetworkPeer(obj) {
 		if (!obj || obj.typeKey !== "peer") return false;
-		const idp = obj.fields?.identity_pubkey?.stringValue ?? obj.fields?.identity_pubkey;
+		if (obj.deleted) return false;
+		const idp = obj.scalars?.identity_pubkey;
 		return typeof idp === "string" && idp.length === 64;
 	}
 	function getTrustLevel(obj) {
-		const t = obj?.fields?.trust_level;
-		if (!t) return "stranger";
-		return (typeof t === "string") ? t : (t.stringValue ?? "stranger");
+		return obj?.scalars?.trust_level ?? "stranger";
 	}
 	// Mirrors /peer's isPeered() server-side — "peered" means
 	// trust_level ≥ trusted, the gate every cross-glon feature uses.
@@ -473,6 +478,8 @@ export function buildCosmos(state, materials) {
 	function isPeeredPeer(obj) { return PEERED_TRUST_LEVELS.has(getTrustLevel(obj)); }
 
 	// One bucket per local typeKey. Each becomes its own ring.
+	// Skip soft-deleted objects so the cleanupPeerDuplicates ghosts
+	// don't pile up on the outer ring or in any type cluster.
 	const buckets = new Map();            // typeKey → [obj_id, ...]
 	const networkPeerIds = [];            // separate — pinned outer band
 	for (const typeKey of typeKeysOrdered) {
@@ -483,6 +490,7 @@ export function buildCosmos(state, materials) {
 			? [...list].sort((a, b) => spawnDepthOf(a) - spawnDepthOf(b) || a.id.localeCompare(b.id))
 			: [...list].sort((a, b) => a.id.localeCompare(b.id));
 		for (const obj of sorted) {
+			if (obj.deleted) continue;                        // soft-deleted — invisible
 			if (orbitParentOf.has(obj.id)) continue;          // satellite — handled later
 			if (isNetworkPeer(obj)) { networkPeerIds.push(obj.id); continue; }
 			let bucket = buckets.get(typeKey);
