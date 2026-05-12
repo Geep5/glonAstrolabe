@@ -411,69 +411,49 @@ export function buildCosmos(state, materials) {
 
 	const visuals = new Map();   // id → visual state (lastSeen, baseEmissive, etc.)
 
-	// ── Belly-ring layout ──────────────────────────────────────────
-	// The scene is built around an invisible "giant" at the origin: the
-	// human / principal. Type cells form a flat ring around the giant's
-	// belly (Y = 0) — like Saturn's rings, with the giant at the center.
-	// The camera looks down from head height onto this ring.
+	// ── Single belly-ring layout ──────────────────────────────────
+	// All primary objects share ONE flat ring around the giant at Y=0.
+	// No type cells, no sub-rings, no clustering — every node is a
+	// point on the same circle. Type identity is conveyed visually
+	// (color + scale), not spatially. Objects are ordered by type
+	// (so same-type nodes appear as adjacent arcs along the ring) and
+	// then by id within a type for deterministic placement.
 	//
-	// Every type — including agents and programs — gets one slot on the
-	// ring, evenly distributed in angle. Adding a new type just inserts
-	// another slot; rebalancing happens automatically because slot count
-	// equals type count.
-	//
-	// Sub-grids inside each cell extend along TWO local axes:
-	//   - tangent-along-ring (perpendicular to the radial direction, in
-	//     the horizontal plane) — so items spread sideways along the ring
-	//   - vertical (world Y) — so denser type cells stack upward
-	// This keeps every object cluster facing the giant and at roughly
-	// the same horizontal distance, instead of poking inward through the
-	// center or outward into the void.
+	// Anchors keep their own dedicated spiral just outside the ring;
+	// satellites (objects with orbitParentOf) still orbit their parent
+	// wherever the parent landed on the ring.
 	const typeKeysOrdered = [];
 	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
 	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
 
-	const RING_RADIUS = 22;        // distance from giant to type cells along the ring
-	const RING_Y = 0;              // belly height
-	const ITEM_SPACING = 3.5;      // spacing between objects within a cell (tangent + vertical)
+	const RING_RADIUS = 24;        // distance from giant to every node on the ring
+	const RING_Y = 0;              // belly height — every node sits at this Y
 
-	function ringPoint(typeIndex, total) {
-		// Slot index → angle around the ring. -π/2 starting offset puts
-		// the first type at "12 o'clock" (toward -Z), so the visual
-		// reading order matches the scene clock that lives in the floor.
-		const angle = (typeIndex / total) * Math.PI * 2 - Math.PI / 2;
-		return new THREE.Vector3(
+	// Build a global ordering of every primary (non-satellite, non-anchor)
+	// object so each gets its own deterministic angular slot on the ring.
+	const ringPrimaries = [];
+	for (const typeKey of typeKeysOrdered) {
+		if (typeKey === "chain.anchor") continue;            // anchors have their spiral
+		const list = byType.get(typeKey) ?? [];
+		const isAgentType = typeKey === "agent" || typeKey === "trading_agent";
+		const sorted = isAgentType
+			? [...list].sort((a, b) => spawnDepthOf(a) - spawnDepthOf(b) || a.id.localeCompare(b.id))
+			: [...list].sort((a, b) => a.id.localeCompare(b.id));
+		for (const obj of sorted) {
+			if (!orbitParentOf.has(obj.id)) ringPrimaries.push(obj.id);
+		}
+	}
+	const primaryRingPosition = new Map();
+	const ringCount = Math.max(1, ringPrimaries.length);
+	for (let i = 0; i < ringPrimaries.length; i++) {
+		// -π/2 offset puts the first slot at "12 o'clock" (toward -Z),
+		// matching the scene-clock convention.
+		const angle = (i / ringCount) * Math.PI * 2 - Math.PI / 2;
+		primaryRingPosition.set(ringPrimaries[i], new THREE.Vector3(
 			Math.cos(angle) * RING_RADIUS,
 			RING_Y,
 			Math.sin(angle) * RING_RADIUS,
-		);
-	}
-
-	const cellPositions = new Map();
-	for (let i = 0; i < typeKeysOrdered.length; i++) {
-		cellPositions.set(typeKeysOrdered[i], ringPoint(i, typeKeysOrdered.length));
-	}
-
-	function cellOrigin(typeIndex) {
-		const tk = typeKeysOrdered[typeIndex];
-		return cellPositions.get(tk).clone();
-	}
-
-	// Build a local tangent frame for each cell on the ring:
-	//   - radialOut: horizontal vector from belly to cell
-	//   - tangentU:  perpendicular to radial, in the horizontal plane
-	//                (along the ring's circumference)
-	//   - tangentV:  world up (Y) — sub-grid stacks vertically
-	// Cells with many objects therefore grow upward as columns rather
-	// than spreading into neighbouring cells.
-	function cellTangentFrame(origin) {
-		const radialOut = new THREE.Vector3(origin.x, 0, origin.z);
-		if (radialOut.lengthSq() < 0.001) radialOut.set(0, 0, 1);
-		radialOut.normalize();
-		// Tangent along the ring = world-up × radialOut. Right-handed.
-		const tangentU = new THREE.Vector3(0, 1, 0).cross(radialOut).normalize();
-		const tangentV = new THREE.Vector3(0, 1, 0);
-		return { radialOut, tangentU, tangentV };
+		));
 	}
 
 	// Nodes --------------------------------------------------------
@@ -482,24 +462,18 @@ export function buildCosmos(state, materials) {
 		const list = byType.get(typeKey);
 		if (!list || list.length === 0) continue;
 		const isAgentType = typeKey === "agent" || typeKey === "trading_agent";
-		// Sphere-shell layout positions are precomputed in cellPositions
-		// above. layoutForType still returns scale + featured flags but
-		// the legacy `radius` field it derives is unused — we let the
-		// optional-chain in layoutForType absorb a missing computedRadii
-		// arg rather than threading one through.
+		// Per-type visual treatment: scale + color + planet texture. The
+		// `radius` field returned by layoutForType is unused — ring
+		// positions come from primaryRingPosition (global pre-pass above).
 		const { scale, featured } = layoutForType(typeKey);
 		const { color, hex } = colorForType(typeKey);
 		const surface = planetTextureFor(typeKey, hex);
-		const origin = cellOrigin(tIdx);
 
-		// Deterministic ordering. Agents sorted by spawn_depth; rest by id.
+		// Deterministic iteration (matches the order used to build
+		// primaryRingPosition above) so satellite-index math stays stable.
 		const sorted = isAgentType
 			? [...list].sort((a, b) => spawnDepthOf(a) - spawnDepthOf(b) || a.id.localeCompare(b.id))
 			: [...list].sort((a, b) => a.id.localeCompare(b.id));
-
-		// Primaries = objects not orbiting a parent.
-		const primariesByType = sorted.filter((o) => !orbitParentOf.has(o.id));
-		const subGridCols = Math.ceil(Math.sqrt(primariesByType.length));
 
 		for (let i = 0; i < sorted.length; i++) {
 			const obj = sorted[i];
@@ -530,36 +504,23 @@ export function buildCosmos(state, materials) {
 				orbitAngle = theta;
 				orbitYOffset = jitterY(obj.id) * 0.4;
 			} else {
-				// Primary: arrange the cell's objects on concentric mini-
-				// rings in the horizontal plane around the cell origin.
-				// Each ring holds up to ITEMS_PER_RING items spaced
-				// evenly by angle. Extra items spill onto a slightly
-				// larger ring stacked next to the first. Result: every
-				// type cell reads as one or more concentric circles
-				// around its centre — visually echoing the main ring of
-				// types around the giant.
-				const N = primariesByType.length;
-				const primaryIdx = primariesByType.indexOf(obj);
-				const ITEMS_PER_RING = 10;
-				const ringIdx = Math.floor(primaryIdx / ITEMS_PER_RING);
-				const idxInRing = primaryIdx % ITEMS_PER_RING;
-				const itemsInThisRing = Math.min(ITEMS_PER_RING, N - ringIdx * ITEMS_PER_RING);
-				// Inner ring radius depends on item count so a single
-				// item still sits a touch off-centre rather than ON the
-				// cell origin (where the agent's halo / cell marker is).
-				const baseR = N === 1 ? 0 : Math.max(1.4, Math.min(2.0, 0.8 + 0.18 * itemsInThisRing));
-				const ringR = baseR + ringIdx * 1.4;
-				const angleOffset = ringIdx * (Math.PI / ITEMS_PER_RING); // stagger rings so they don't visually rhyme
-				const angle = (idxInRing / itemsInThisRing) * Math.PI * 2 + angleOffset;
-				const yJitter = (hash01(obj.id + "yj") - 0.5) * 0.5;
-				pos = origin.clone().add(new THREE.Vector3(
-					Math.cos(angle) * ringR,
-					yJitter,
-					Math.sin(angle) * ringR,
-				));
+				// Primary: take this object's pre-assigned slot on the
+				// single global ring. primaryRingPosition was built in
+				// the pre-pass above and contains exactly one position
+				// per primary (non-satellite, non-anchor) object, at
+				// the same Y as every other node.
+				const ringPos = primaryRingPosition.get(obj.id);
+				if (ringPos) {
+					pos = ringPos.clone();
+				} else {
+					// Defensive fallback (shouldn't happen if pre-pass
+					// and iteration order match) — drop the object at
+					// origin so it's visible and obviously misplaced.
+					pos = new THREE.Vector3(0, RING_Y, 0);
+				}
 				orbitRadius = 0;
 				orbitAngle = 0;
-				orbitCenterY = origin.y;
+				orbitCenterY = RING_Y;
 				parentId = null;
 			}
 
