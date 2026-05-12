@@ -599,6 +599,29 @@ export function buildCosmos(state, materials) {
 			halo.userData = { kind: "halo", id: obj.id };
 			group.add(halo);
 
+			// Agent nodes are "their own little solar system" — give every
+			// agent a visible local orbit ring so even when she has no
+			// memories or subagents yet, you can read her as a focal point
+			// with structure around her, distinct from a plain ring node.
+			// When owned objects (pinned_facts, milestones) or subagents
+			// (spawn_parent) DO exist, the existing satellite-placement
+			// code drops them right onto this visible ring.
+			if (isAgentType && !orbitParentOf.has(obj.id)) {
+				const localOrbitR = Math.max(2.5, r * 2.4);
+				const ringGeo = new THREE.TorusGeometry(localOrbitR, 0.06, 8, 64);
+				const ringMat = new THREE.MeshBasicMaterial({
+					color: 0x5eead4,
+					transparent: true,
+					opacity: 0.35,
+					depthWrite: false,
+				});
+				const agentOrbitRing = new THREE.Mesh(ringGeo, ringMat);
+				agentOrbitRing.rotation.x = Math.PI / 2;     // lay flat in the XZ plane around the agent
+				agentOrbitRing.position.copy(pos);
+				agentOrbitRing.userData = { kind: "agent-orbit", id: obj.id };
+				group.add(agentOrbitRing);
+			}
+
 			// Rapier rigid body + collider
 			const RAPIER = getRapier();
 			const world = getWorld();

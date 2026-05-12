@@ -159,11 +159,14 @@ function setupThree() {
 	// point, so anywhere the camera looks there is content.
 	camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 400);
 	camera.position.set(0, 6, 0);
-	// Start gently pitched down at the belly so the user opens onto the
-	// floor of nodes rather than staring at the horizon.
-	const initialPitch = -0.35; // ~20° down
+	// Start pitched harder and yawed slightly off-axis so the camera
+	// opens onto the ring as a RING (a wide arc of nodes below) rather
+	// than staring at whichever single node happens to be at 12-o'clock.
+	// Previous (-0.35, 0) put the first-priority type (agent) dead-center.
+	const initialPitch = -0.65; // ~37° down — ring reads as a ring
+	const initialYaw = 0.3;     // ~17° off-axis — no node dead-center
 	camera.rotation.order = "YXZ";
-	camera.rotation.set(initialPitch, 0, 0);
+	camera.rotation.set(initialPitch, initialYaw, 0);
 
 	controls = new OrbitControls(camera, canvas);
 	// Mouse rotation is handled by our own yaw/pitch handler below
