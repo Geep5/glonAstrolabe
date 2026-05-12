@@ -433,24 +433,45 @@ export function buildCosmos(state, materials) {
 	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
 	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
 
-	const INNER_RADIUS  = 6;       // my agents orbit close to my sun
-	const MIDDLE_RADIUS = 24;      // most DAG content
-	const OUTER_RADIUS  = 44;      // network peers (other glons)
-	const RING_Y = 0;              // every primary sits on the belly plane
+	// Per-type ring radii. Types that "wrap the sun" — agents, peers,
+	// programs, source files — get dedicated close-orbit rings at
+	// increasing radii so the sun reads as the center of a layered
+	// planetary system. Other types fall back to DEFAULT_MIDDLE_RADIUS.
+	// Network peers (other glons) go to OUTER_RADIUS regardless of type.
+	const TYPE_RADIUS = {
+		agent:         5,
+		trading_agent: 5,
+		peer:         10,   // local /peer entries (no identity_pubkey)
+		program:      14,
+		typescript:   18,
+		javascript:   18,
+		json:         21,
+	};
+	const DEFAULT_MIDDLE_RADIUS = 26;
+	const OUTER_RADIUS          = 44;     // network peers (other glons)
+	const RING_Y                = 0;      // every primary sits on the belly plane
 
 	// Distinguish a NETWORK peer (a remote glon we discovered) from local
 	// /peer entries that have no identity_pubkey (the human "Grant" self,
 	// "TestPeer", etc.). Network peers go to the outer ring; local-only
-	// peers ride the middle ring with everything else.
+	// peers ride the inner peer ring with type-specific radius.
 	function isNetworkPeer(obj) {
 		if (!obj || obj.typeKey !== "peer") return false;
 		const idp = obj.fields?.identity_pubkey?.stringValue ?? obj.fields?.identity_pubkey;
 		return typeof idp === "string" && idp.length === 64;
 	}
 
-	const innerPrimaries  = [];
-	const middlePrimaries = [];
-	const outerPrimaries  = [];
+	function radiusForPrimary(obj) {
+		if (isNetworkPeer(obj)) return OUTER_RADIUS;
+		const r = TYPE_RADIUS[obj.typeKey];
+		return r ?? DEFAULT_MIDDLE_RADIUS;
+	}
+
+	// Bucket primaries by their assigned radius. Each bucket gets its own
+	// evenly-spaced ring around the sun. Order within a bucket preserves
+	// TYPE_PRIORITY-then-id ordering so same-type nodes are adjacent on
+	// their ring (forming a colored arc).
+	const buckets = new Map(); // radius → [obj_id, ...]
 	for (const typeKey of typeKeysOrdered) {
 		if (typeKey === "chain.anchor") continue;            // anchors have their spiral
 		const list = byType.get(typeKey) ?? [];
@@ -460,9 +481,10 @@ export function buildCosmos(state, materials) {
 			: [...list].sort((a, b) => a.id.localeCompare(b.id));
 		for (const obj of sorted) {
 			if (orbitParentOf.has(obj.id)) continue;          // satellite — handled later
-			if (isAgentType)               innerPrimaries.push(obj.id);
-			else if (isNetworkPeer(obj))   outerPrimaries.push(obj.id);
-			else                           middlePrimaries.push(obj.id);
+			const radius = radiusForPrimary(obj);
+			let bucket = buckets.get(radius);
+			if (!bucket) { bucket = []; buckets.set(radius, bucket); }
+			bucket.push(obj.id);
 		}
 	}
 
@@ -481,13 +503,11 @@ export function buildCosmos(state, materials) {
 		}
 		return out;
 	}
-	const innerPos  = placeOnRing(innerPrimaries,  INNER_RADIUS);
-	const middlePos = placeOnRing(middlePrimaries, MIDDLE_RADIUS);
-	const outerPos  = placeOnRing(outerPrimaries,  OUTER_RADIUS);
 	const primaryRingPosition = new Map();
-	for (const [k, v] of innerPos)  primaryRingPosition.set(k, v);
-	for (const [k, v] of middlePos) primaryRingPosition.set(k, v);
-	for (const [k, v] of outerPos)  primaryRingPosition.set(k, v);
+	for (const [radius, ids] of buckets) {
+		const positions = placeOnRing(ids, radius);
+		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
+	}
 
 	// ── Visible local sun (the "computer" — the local glon) ────────
 	// Sits at origin; was the invisible giant. Yellow/white emissive
@@ -776,11 +796,12 @@ export function buildCosmos(state, materials) {
 			if (!seen.has(a.id)) anchorChain.push(a);
 		}
 
-		// Anchor spiral lives just outside the type-cell ring, so it
-		// forms an outer halo at belly height. RING_RADIUS is the
-		// type-cell ring radius; sub-grids extend a few units along
-		// the tangent direction so we add a small buffer.
-		const gridOuterRadius = RING_RADIUS + 6;
+		// Anchor spiral forms a halo OUTSIDE the outermost concentric ring
+		// — i.e. just beyond network peers at OUTER_RADIUS. Anchors are
+		// chain-of-history infrastructure; rendering them at the periphery
+		// keeps them visible but out of the social-topology layer near
+		// the sun.
+		const gridOuterRadius = OUTER_RADIUS + 4;
 		const anchorGap = Math.min(4.0, Math.max(2.0, 1.5 + anchors.length * 0.1));
 		const R0 = gridOuterRadius + anchorGap;
 		const DR = anchors.length > 1 ? Math.max(0.003, 2.5 / anchors.length) : 0;
