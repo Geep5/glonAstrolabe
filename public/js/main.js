@@ -388,7 +388,24 @@ function setupThree() {
 		// from above. As the camera orbits, the clock stays in world space
 		// — so a node "at 12 o'clock" really is the one closest to -Z.
 		const gridY = -12;
-		buildSceneClock(scene, { y: gridY, radius: 80 });
+		// Neon reference grid (restored from pre-clock-face era). Square
+		// floor grid is a quieter spatial reference than the round clock
+		// face — gives a sense of distance and direction without the
+		// dial's noon-hand line drawing the eye through origin.
+		const grid = new THREE.GridHelper(200, 100, 0x5eead4, 0x0d2b28);
+		grid.position.y = gridY;
+		if (grid.material) {
+			// GridHelper actually has two materials internally (.material
+			// can be an array); ensure both are dim so the floor doesn't
+			// dominate the scene.
+			const mats = Array.isArray(grid.material) ? grid.material : [grid.material];
+			for (const m of mats) {
+				m.transparent = true;
+				m.opacity = 0.5;
+				m.depthWrite = false;
+			}
+		}
+		scene.add(grid);
 
 		// Upward-pointing neon lights to brighten the dark void
 		const gridLight = new THREE.PointLight(0x5eead4, 1.8, 160, 1.3);
