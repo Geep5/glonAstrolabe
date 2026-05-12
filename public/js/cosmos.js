@@ -433,49 +433,30 @@ export function buildCosmos(state, materials) {
 	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
 	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
 
-	// Per-type ring BASE radii. Each ring will GROW from this value if
-	// its item count would otherwise cluster items closer than
-	// MIN_ARC_SPACING. Concentric rings then push outward in order so
-	// they never overlap (later rings respect the actual radius of
-	// earlier rings, not just the base).
-	const TYPE_RADIUS = {
-		agent:         5,
-		trading_agent: 5,
-		peer:         10,   // local /peer entries (no identity_pubkey)
-		program:      14,
-		typescript:   18,
-		javascript:   18,
-		json:         21,
-	};
-	const DEFAULT_MIDDLE_RADIUS = 26;
-	const OUTER_RADIUS          = 44;     // network peers (other glons)
-	const RING_Y                = 0;      // every primary sits on the belly plane
-
-	// Auto-growth knobs.
-	const MIN_ARC_SPACING = 2.4;          // min tangent distance between adjacent items on a ring
-	const MIN_RING_GAP    = 3.0;          // min radial gap between concentric rings
+	// Ring sizing is now purely count-driven: each type gets one ring,
+	// rings are ordered by item count ascending (smallest count closest
+	// to the sun), and each ring's radius is the smallest value that
+	// satisfies all three constraints below.
+	const MIN_INNER_RADIUS = 5;           // closest a ring can sit to the sun (clears agent orbit)
+	const OUTER_PEER_RADIUS = 44;         // network peers (other glons) — semantic outer band
+	const RING_Y           = 0;           // every primary sits on the belly plane
+	const MIN_ARC_SPACING  = 2.4;         // min tangent distance between adjacent items on a ring
+	const MIN_RING_GAP     = 3.0;         // min radial gap between concentric rings
 
 	// Distinguish a NETWORK peer (a remote glon we discovered) from local
 	// /peer entries that have no identity_pubkey (the human "Grant" self,
-	// "TestPeer", etc.). Network peers go to the outer ring; local-only
-	// peers ride the inner peer ring with type-specific radius.
+	// "TestPeer", etc.). Network peers are pinned to OUTER_PEER_RADIUS so
+	// they always sit beyond the local content rings, regardless of how
+	// many there are — they're conceptually "them," not "me."
 	function isNetworkPeer(obj) {
 		if (!obj || obj.typeKey !== "peer") return false;
 		const idp = obj.fields?.identity_pubkey?.stringValue ?? obj.fields?.identity_pubkey;
 		return typeof idp === "string" && idp.length === 64;
 	}
 
-	function radiusForPrimary(obj) {
-		if (isNetworkPeer(obj)) return OUTER_RADIUS;
-		const r = TYPE_RADIUS[obj.typeKey];
-		return r ?? DEFAULT_MIDDLE_RADIUS;
-	}
-
-	// Bucket primaries by their assigned radius. Each bucket gets its own
-	// evenly-spaced ring around the sun. Order within a bucket preserves
-	// TYPE_PRIORITY-then-id ordering so same-type nodes are adjacent on
-	// their ring (forming a colored arc).
-	const buckets = new Map(); // radius → [obj_id, ...]
+	// One bucket per local typeKey. Each becomes its own ring.
+	const buckets = new Map();            // typeKey → [obj_id, ...]
+	const networkPeerIds = [];            // separate — pinned outer band
 	for (const typeKey of typeKeysOrdered) {
 		if (typeKey === "chain.anchor") continue;            // anchors have their spiral
 		const list = byType.get(typeKey) ?? [];
@@ -485,9 +466,9 @@ export function buildCosmos(state, materials) {
 			: [...list].sort((a, b) => a.id.localeCompare(b.id));
 		for (const obj of sorted) {
 			if (orbitParentOf.has(obj.id)) continue;          // satellite — handled later
-			const radius = radiusForPrimary(obj);
-			let bucket = buckets.get(radius);
-			if (!bucket) { bucket = []; buckets.set(radius, bucket); }
+			if (isNetworkPeer(obj)) { networkPeerIds.push(obj.id); continue; }
+			let bucket = buckets.get(typeKey);
+			if (!bucket) { bucket = []; buckets.set(typeKey, bucket); }
 			bucket.push(obj.id);
 		}
 	}
@@ -508,32 +489,41 @@ export function buildCosmos(state, materials) {
 		return out;
 	}
 
-	// Auto-grow each ring's radius so items maintain MIN_ARC_SPACING,
-	// and so concentric rings stay at least MIN_RING_GAP apart. Process
-	// buckets from inner base radius outward; each ring's final radius
-	// is the max of its base, the spacing-floor for its count, and the
-	// previous ring's outer edge + gap.
+	// Count-ascending order: smallest types sit closest to the sun,
+	// largest types push outward. Each ring's final radius is the max
+	// of three constraints:
+	//   - MIN_INNER_RADIUS   (closest a ring can sit to the sun)
+	//   - spacingFloor       (room for its own items at MIN_ARC_SPACING)
+	//   - prevRadius + GAP   (visible separation from the previous ring)
+	// As inner rings grow to accommodate more items, outer rings rebase
+	// off the actual (post-growth) radius so they never overlap.
 	const primaryRingPosition = new Map();
-	const sortedBuckets = [...buckets.entries()].sort((a, b) => a[0] - b[0]);
+	const sortedBuckets = [...buckets.entries()].sort((a, b) => a[1].length - b[1].length);
 	let prevRadius = 0;
-	const actualRingRadius = new Map();   // baseRadius → actualRadius (for outer-ring rebase)
-	for (const [baseRadius, ids] of sortedBuckets) {
+	for (const [, ids] of sortedBuckets) {
 		const N = ids.length;
 		// Radius needed to fit N items at MIN_ARC_SPACING:
 		//   2πR / N ≥ MIN_ARC_SPACING  →  R ≥ (N × MIN_ARC_SPACING) / (2π)
 		const spacingFloor = N <= 1 ? 0 : (N * MIN_ARC_SPACING) / (2 * Math.PI);
 		const gapFloor = prevRadius + MIN_RING_GAP;
-		const radius = Math.max(baseRadius, spacingFloor, gapFloor);
+		const radius = Math.max(MIN_INNER_RADIUS, spacingFloor, gapFloor);
 		const positions = placeOnRing(ids, radius);
 		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
-		actualRingRadius.set(baseRadius, radius);
 		prevRadius = radius;
 	}
-	// `outerRingRadius` is the radius of the outermost concentric ring
-	// (whatever value the last bucket landed on after auto-growth).
-	// Used by the anchor spiral so it stays a halo beyond ALL content
-	// rings, not just where OUTER_RADIUS would have put it.
-	const outerRingRadius = prevRadius > 0 ? prevRadius : OUTER_RADIUS;
+	// Network peers always live beyond the local content rings — the
+	// "them" band. Sits at the larger of OUTER_PEER_RADIUS (semantic
+	// floor) and the post-growth edge of the local rings + gap.
+	if (networkPeerIds.length > 0) {
+		const N = networkPeerIds.length;
+		const spacingFloor = N <= 1 ? 0 : (N * MIN_ARC_SPACING) / (2 * Math.PI);
+		const gapFloor = prevRadius + MIN_RING_GAP;
+		const radius = Math.max(OUTER_PEER_RADIUS, spacingFloor, gapFloor);
+		const positions = placeOnRing(networkPeerIds, radius);
+		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
+		prevRadius = radius;
+	}
+	const outerRingRadius = prevRadius > 0 ? prevRadius : OUTER_PEER_RADIUS;
 
 	// ── Visible local sun (the "computer" — the local glon) ────────
 	// Sits at origin; was the invisible giant. Yellow/white emissive
