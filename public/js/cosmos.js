@@ -668,10 +668,21 @@ export function buildCosmos(state, materials) {
 			if (!seen.has(a.id)) anchorChain.push(a);
 		}
 
-		// Dynamic spiral placement: starts just outside the outermost non-anchor
-		// ring and scales tightness based on anchor count.
+		// Dynamic spiral placement: starts just outside the outermost
+		// grid cell and scales tightness based on anchor count.
+		//
+		// Older ring layouts kept a `maxRadius` from computeTypeRadii(); the
+		// grid-layout refactor (commit 3fdf721) removed that computation but
+		// left this reference orphaned. Reconstruct an equivalent "outermost
+		// extent" from the live grid geometry — half the diagonal of the
+		// grid plus the sub-grid half-extent, so anchors begin just outside
+		// the farthest type cell regardless of how many types we have.
+		const GRID_ROWS = Math.ceil(typeKeysOrdered.length / GRID_COLS);
+		const halfDiagX = ((GRID_COLS - 1) / 2) * CELL_SIZE;
+		const halfDiagZ = ((GRID_ROWS - 1) / 2) * CELL_SIZE;
+		const gridOuterRadius = Math.sqrt(halfDiagX * halfDiagX + halfDiagZ * halfDiagZ) + CELL_SIZE / 2;
 		const anchorGap = Math.min(4.0, Math.max(2.0, 1.5 + anchors.length * 0.1));
-		const R0 = maxRadius + anchorGap;
+		const R0 = gridOuterRadius + anchorGap;
 		const DR = anchors.length > 1 ? Math.max(0.003, 2.5 / anchors.length) : 0;
 		const DTHETA = 0.04;
 		for (let i = 0; i < anchorChain.length; i++) {
