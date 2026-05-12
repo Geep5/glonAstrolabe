@@ -38,27 +38,32 @@ function shortKey(s) {
 }
 
 function renderMessages() {
-	const msgs = [...state.messagesById.values()].sort((a, b) => (a.sent_at || 0) - (b.sent_at || 0));
-	if (msgs.length === 0) {
-		PEER_CHAT_MESSAGES.innerHTML = `<li class="peer-chat-empty muted small">No messages yet. Say hello.</li>`;
-		return;
-	}
-	const wasAtBottom = isScrolledToBottom();
-	PEER_CHAT_MESSAGES.innerHTML = msgs.map((m) => {
-		const cls = m.direction === "out" ? "out" : "in";
-		const tsRaw = m.sent_at ? new Date(m.sent_at) : null;
-		const ts = tsRaw && !isNaN(tsRaw.getTime())
-			? tsRaw.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-			: "";
-		let body;
-		if (m.kind === "text") {
-			body = escapeHtml(String(m.body ?? ""));
-		} else {
-			body = `<span class="peer-chat-kind">[${escapeHtml(String(m.kind))}]</span> <code>${escapeHtml(JSON.stringify(m.body))}</code>`;
+	try {
+		const msgs = [...state.messagesById.values()].sort((a, b) => (a.sent_at || 0) - (b.sent_at || 0));
+		if (msgs.length === 0) {
+			if (PEER_CHAT_MESSAGES) PEER_CHAT_MESSAGES.innerHTML = `<li class="peer-chat-empty muted small">No messages yet. Say hello.</li>`;
+			return;
 		}
-		return `<li class="peer-chat-msg peer-chat-msg-${cls}"><span class="peer-chat-body">${body}</span><span class="peer-chat-ts muted">${ts}</span></li>`;
-	}).join("");
-	if (wasAtBottom) scrollToBottom();
+		const wasAtBottom = isScrolledToBottom();
+		if (!PEER_CHAT_MESSAGES) { console.warn("[peer-chat] PEER_CHAT_MESSAGES element missing"); return; }
+		PEER_CHAT_MESSAGES.innerHTML = msgs.map((m) => {
+			const cls = m.direction === "out" ? "out" : "in";
+			const tsRaw = m.sent_at ? new Date(m.sent_at) : null;
+			const ts = tsRaw && !isNaN(tsRaw.getTime())
+				? tsRaw.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+				: "";
+			let body;
+			if (m.kind === "text") {
+				body = escapeHtml(String(m.body ?? ""));
+			} else {
+				body = `<span class="peer-chat-kind">[${escapeHtml(String(m.kind))}]</span> <code>${escapeHtml(JSON.stringify(m.body))}</code>`;
+			}
+			return `<li class="peer-chat-msg peer-chat-msg-${cls}"><span class="peer-chat-body">${body}</span><span class="peer-chat-ts muted">${ts}</span></li>`;
+		}).join("");
+		if (wasAtBottom) scrollToBottom();
+	} catch (err) {
+		console.error("[peer-chat] renderMessages crashed:", err);
+	}
 }
 
 function isScrolledToBottom() {
@@ -77,6 +82,7 @@ async function poll() {
 	try {
 		const res = await fetch(`/api/peer-chat/messages?identity_pubkey=${encodeURIComponent(state.identity_pubkey)}`);
 		const json = await res.json().catch(() => null);
+		console.log("[peer-chat] poll:", res.status, "messages count:", (json?.messages ?? []).length);
 		if (!res.ok || json?.ok === false) {
 			PEER_CHAT_STATUS.textContent = json?.error ? `poll error: ${json.error}` : `HTTP ${res.status}`;
 			return;
@@ -89,7 +95,10 @@ async function poll() {
 				changed = true;
 			}
 		}
-		if (changed) renderMessages();
+		if (changed) {
+			renderMessages();
+			console.log("[peer-chat] poll: rendered", state.messagesById.size, "messages");
+		}
 		// Mark read so the unread badge can clear on the daemon side.
 		// Best-effort; ignore failures.
 		fetch("/api/peer-chat/mark-read", {
@@ -98,7 +107,9 @@ async function poll() {
 			body: JSON.stringify({ identity_pubkey: state.identity_pubkey }),
 		}).catch(() => {});
 	} catch (err) {
+		console.error("[peer-chat] poll: network error", err);
 		PEER_CHAT_STATUS.textContent = `network: ${err?.message ?? String(err)}`;
+	}
 	} finally {
 		state.pollInflight = false;
 	}
@@ -121,6 +132,7 @@ async function sendMessage(text) {
 	};
 	state.messagesById.set(tmpId, optimistic);
 	renderMessages();
+	console.log("[peer-chat] sendMessage: optimistic inserted, tmpId=", tmpId, "map size=", state.messagesById.size);
 	try {
 		const res = await fetch("/api/peer-chat/send", {
 			method: "POST",
@@ -128,6 +140,7 @@ async function sendMessage(text) {
 			body: JSON.stringify({ identity_pubkey: state.identity_pubkey, text }),
 		});
 		const json = await res.json().catch(() => null);
+		console.log("[peer-chat] sendMessage: response", res.status, json);
 		if (!res.ok || json?.ok === false) {
 			PEER_CHAT_STATUS.textContent = json?.error || `send failed (HTTP ${res.status})`;
 			state.messagesById.delete(tmpId);
@@ -135,8 +148,6 @@ async function sendMessage(text) {
 			return false;
 		}
 		PEER_CHAT_STATUS.textContent = "";
-		// Replace the optimistic placeholder with the real msg_id so the
-		// next poll doesn't create a duplicate.
 		if (json?.result?.msg_id) {
 			state.messagesById.delete(tmpId);
 			state.messagesById.set(json.result.msg_id, {
@@ -144,10 +155,12 @@ async function sendMessage(text) {
 				msg_id: json.result.msg_id,
 			});
 			renderMessages();
+			console.log("[peer-chat] sendMessage: replaced tmpId with real msg_id", json.result.msg_id);
 		}
 		poll();
 		return true;
 	} catch (err) {
+		console.error("[peer-chat] sendMessage: network error", err);
 		PEER_CHAT_STATUS.textContent = `network: ${err?.message ?? String(err)}`;
 		state.messagesById.delete(tmpId);
 		renderMessages();
@@ -167,6 +180,7 @@ export function openPeerChat({ identity_pubkey, display_name }) {
 	}
 	// If switching peers, clear the buffer so old messages don't bleed in.
 	if (state.identity_pubkey !== identity_pubkey) {
+		console.log("[peer-chat] openPeerChat: switching peer from", state.identity_pubkey, "to", identity_pubkey, "- clearing messages");
 		state.messagesById = new Map();
 	}
 	state.identity_pubkey = identity_pubkey;
@@ -180,6 +194,7 @@ export function openPeerChat({ identity_pubkey, display_name }) {
 	state.pollHandle = setInterval(poll, PEER_CHAT_POLL_MS);
 	poll();
 	setTimeout(() => PEER_CHAT_INPUT.focus(), 0);
+	console.log("[peer-chat] openPeerChat: opened for", identity_pubkey, "messages:", state.messagesById.size);
 }
 
 export function closePeerChat() {
