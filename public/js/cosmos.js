@@ -433,11 +433,11 @@ export function buildCosmos(state, materials) {
 	for (const tk of TYPE_PRIORITY) if (byType.has(tk)) typeKeysOrdered.push(tk);
 	for (const tk of byType.keys()) if (!typeKeysOrdered.includes(tk)) typeKeysOrdered.push(tk);
 
-	// Per-type ring radii. Types that "wrap the sun" — agents, peers,
-	// programs, source files — get dedicated close-orbit rings at
-	// increasing radii so the sun reads as the center of a layered
-	// planetary system. Other types fall back to DEFAULT_MIDDLE_RADIUS.
-	// Network peers (other glons) go to OUTER_RADIUS regardless of type.
+	// Per-type ring BASE radii. Each ring will GROW from this value if
+	// its item count would otherwise cluster items closer than
+	// MIN_ARC_SPACING. Concentric rings then push outward in order so
+	// they never overlap (later rings respect the actual radius of
+	// earlier rings, not just the base).
 	const TYPE_RADIUS = {
 		agent:         5,
 		trading_agent: 5,
@@ -450,6 +450,10 @@ export function buildCosmos(state, materials) {
 	const DEFAULT_MIDDLE_RADIUS = 26;
 	const OUTER_RADIUS          = 44;     // network peers (other glons)
 	const RING_Y                = 0;      // every primary sits on the belly plane
+
+	// Auto-growth knobs.
+	const MIN_ARC_SPACING = 2.4;          // min tangent distance between adjacent items on a ring
+	const MIN_RING_GAP    = 3.0;          // min radial gap between concentric rings
 
 	// Distinguish a NETWORK peer (a remote glon we discovered) from local
 	// /peer entries that have no identity_pubkey (the human "Grant" self,
@@ -503,11 +507,33 @@ export function buildCosmos(state, materials) {
 		}
 		return out;
 	}
+
+	// Auto-grow each ring's radius so items maintain MIN_ARC_SPACING,
+	// and so concentric rings stay at least MIN_RING_GAP apart. Process
+	// buckets from inner base radius outward; each ring's final radius
+	// is the max of its base, the spacing-floor for its count, and the
+	// previous ring's outer edge + gap.
 	const primaryRingPosition = new Map();
-	for (const [radius, ids] of buckets) {
+	const sortedBuckets = [...buckets.entries()].sort((a, b) => a[0] - b[0]);
+	let prevRadius = 0;
+	const actualRingRadius = new Map();   // baseRadius → actualRadius (for outer-ring rebase)
+	for (const [baseRadius, ids] of sortedBuckets) {
+		const N = ids.length;
+		// Radius needed to fit N items at MIN_ARC_SPACING:
+		//   2πR / N ≥ MIN_ARC_SPACING  →  R ≥ (N × MIN_ARC_SPACING) / (2π)
+		const spacingFloor = N <= 1 ? 0 : (N * MIN_ARC_SPACING) / (2 * Math.PI);
+		const gapFloor = prevRadius + MIN_RING_GAP;
+		const radius = Math.max(baseRadius, spacingFloor, gapFloor);
 		const positions = placeOnRing(ids, radius);
 		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
+		actualRingRadius.set(baseRadius, radius);
+		prevRadius = radius;
 	}
+	// `outerRingRadius` is the radius of the outermost concentric ring
+	// (whatever value the last bucket landed on after auto-growth).
+	// Used by the anchor spiral so it stays a halo beyond ALL content
+	// rings, not just where OUTER_RADIUS would have put it.
+	const outerRingRadius = prevRadius > 0 ? prevRadius : OUTER_RADIUS;
 
 	// ── Visible local sun (the "computer" — the local glon) ────────
 	// Sits at origin; was the invisible giant. Yellow/white emissive
@@ -796,12 +822,12 @@ export function buildCosmos(state, materials) {
 			if (!seen.has(a.id)) anchorChain.push(a);
 		}
 
-		// Anchor spiral forms a halo OUTSIDE the outermost concentric ring
-		// — i.e. just beyond network peers at OUTER_RADIUS. Anchors are
-		// chain-of-history infrastructure; rendering them at the periphery
-		// keeps them visible but out of the social-topology layer near
-		// the sun.
-		const gridOuterRadius = OUTER_RADIUS + 4;
+		// Anchor spiral forms a halo OUTSIDE the outermost concentric
+		// ring. outerRingRadius is the actual (post-growth) radius of
+		// the last content ring; the spiral starts just beyond that so
+		// adding inner content automatically pushes the anchor halo
+		// out instead of letting it collide with grown rings.
+		const gridOuterRadius = outerRingRadius + 4;
 		const anchorGap = Math.min(4.0, Math.max(2.0, 1.5 + anchors.length * 0.1));
 		const R0 = gridOuterRadius + anchorGap;
 		const DR = anchors.length > 1 ? Math.max(0.003, 2.5 / anchors.length) : 0;
