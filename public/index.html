@@ -83,7 +83,12 @@
 	<aside id="network">
 		<button class="panel-collapse" data-panel="network" title="Collapse">─</button>
 		<h3>Network <span id="network-count" class="count"></span></h3>
-		<div id="network-requests" class="network-requests" hidden></div>
+		<!-- Visibility is driven by the CSS `:empty` rule — shown only when
+		     network-panel.js populates it with pending-incoming-request rows.
+		     Do NOT add the `hidden` attribute here; that overrides `:empty`
+		     and keeps the yellow strip invisible even when there are
+		     requests to accept. -->
+		<div id="network-requests" class="network-requests"></div>
 		<ul id="network-list" class="network-list"></ul>
 		<div class="network-footer muted small" id="network-status"></div>
 	</aside>
