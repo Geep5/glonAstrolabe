@@ -437,7 +437,11 @@ export function buildCosmos(state, materials) {
 	// rings are ordered by item count ascending (smallest count closest
 	// to the sun), and each ring's radius is the smallest value that
 	// satisfies all three constraints below.
-	const MIN_INNER_RADIUS = 5;           // closest a ring can sit to the sun (clears agent orbit)
+	// Closest a ring can sit to the sun. The sun itself has a geometry
+	// radius of 2.4 and a corona out to 3.6, so MIN_INNER_RADIUS needs
+	// to leave room for the agent sphere (radius ~1.3) AND a visible gap
+	// — otherwise the agent looks pinned to the sun's edge.
+	const MIN_INNER_RADIUS = 10;
 	const OUTER_PEER_RADIUS = 44;         // network peers (other glons) — semantic outer band
 	const RING_Y           = 0;           // every primary sits on the belly plane
 	const MIN_ARC_SPACING  = 2.4;         // min tangent distance between adjacent items on a ring
