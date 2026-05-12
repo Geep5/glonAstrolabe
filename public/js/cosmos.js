@@ -458,16 +458,28 @@ export function buildCosmos(state, materials) {
 	// they always sit beyond the local content rings, regardless of how
 	// many there are — they're conceptually "them," not "me."
 	// The astrolabe snapshot projects each object's fields into a plain
-	// `scalars` object (string values), distinct from the raw DAG
-	// `fields` shape (with stringValue wrappers). Cosmos reads via
-	// `obj.scalars` everywhere else — these helpers had been written
-	// against the raw `fields` shape and silently returned defaults,
-	// which is why no network peer was getting the sun/moon treatment.
+	// `scalars` object (string values). Cosmos reads via `obj.scalars`.
+	//
+	// A "network peer" is a /peer row that points at a real remote glon:
+	//   - has BOTH identity_pubkey (chain identity) AND hyperswarm_pubkey
+	//     (current Noise key). identity_pubkey alone isn't enough — local
+	//     test records (TestPeer etc.) sometimes carry our own identity
+	//     pubkey without ever being a real peer on the wire.
+	//   - is not soft-deleted.
+	//   - has been seen recently (within PEER_STALE_MS). Stale peers
+	//     went offline; rendering them as moons forever is noise.
+	const PEER_STALE_MS = 15 * 60 * 1000;   // 15 min; ~3x the announce interval
 	function isNetworkPeer(obj) {
 		if (!obj || obj.typeKey !== "peer") return false;
 		if (obj.deleted) return false;
 		const idp = obj.scalars?.identity_pubkey;
-		return typeof idp === "string" && idp.length === 64;
+		const hsp = obj.scalars?.hyperswarm_pubkey;
+		if (typeof idp !== "string" || idp.length !== 64) return false;
+		if (typeof hsp !== "string" || hsp.length !== 64) return false;
+		const lastSeen = parseInt(obj.scalars?.last_seen ?? "0", 10);
+		if (!lastSeen) return false;                       // never seen — not active
+		if ((Date.now() - lastSeen) > PEER_STALE_MS) return false;
+		return true;
 	}
 	function getTrustLevel(obj) {
 		return obj?.scalars?.trust_level ?? "stranger";
@@ -691,25 +703,29 @@ export function buildCosmos(state, materials) {
 			const networkPeer = isNetworkPeer(obj) && !parentId;
 			if (networkPeer) {
 				if (isPeeredPeer(obj)) {
-					// SUN — peered remote glon
-					r = Math.max(r, 1.6);
+					// SUN — peered remote glon. Sized comparably to the
+					// local sun (geo radius 2.4) so it reads as "another
+					// sun" rather than a node when seen from across the
+					// void (~70 units out).
+					r = Math.max(r, 3.0);
 					mat = new THREE.MeshStandardMaterial({
 						color: 0x2a1d0a,
 						emissive: 0xffc66b,
-						emissiveIntensity: 1.4,
+						emissiveIntensity: 1.8,
 						roughness: 0.4,
 						toneMapped: false,
 					});
-					baseEmissive = 1.4;
+					baseEmissive = 1.8;
 				} else {
-					// MOON — discovered, not yet peered
-					r = Math.min(r, 0.8);
+					// MOON — discovered, not yet peered. Bigger than a
+					// generic node so it's still legible across the void.
+					r = Math.max(r, 1.4);
 					mat = new THREE.MeshLambertMaterial({
 						color: 0x9ca3af,        // cool grey moonlight
-						emissive: 0x232a31,
-						emissiveIntensity: 0.12,
+						emissive: 0x4a5158,
+						emissiveIntensity: 0.25,
 					});
-					baseEmissive = 0.12;
+					baseEmissive = 0.25;
 				}
 			}
 			const mesh = new THREE.Mesh(typeKey === "chain.anchor" ? materials.sphereSmall : materials.sphere, mat);
@@ -718,15 +734,15 @@ export function buildCosmos(state, materials) {
 			mesh.userData = { kind: "object", id: obj.id, typeKey, obj, valueScale: vScale };
 			applyStoredStyle(mesh);
 			group.add(mesh);
-			// Sun-peer corona: faint outer glow around peered remote
+			// Sun-peer corona: prominent outer glow around peered remote
 			// glons, matching the local sun's treatment so connected
-			// glons read as "another sun."
+			// glons read as "another sun" even from far across the void.
 			if (networkPeer && isPeeredPeer(obj)) {
-				const coronaGeo = new THREE.SphereGeometry(r * 1.65, 24, 16);
+				const coronaGeo = new THREE.SphereGeometry(r * 1.7, 32, 20);
 				const coronaMat = new THREE.MeshBasicMaterial({
 					color: 0xffc66b,
 					transparent: true,
-					opacity: 0.20,
+					opacity: 0.30,
 					depthWrite: false,
 				});
 				const corona = new THREE.Mesh(coronaGeo, coronaMat);
