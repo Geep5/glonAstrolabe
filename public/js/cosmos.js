@@ -437,7 +437,13 @@ export function buildCosmos(state, materials) {
 		const list = byType.get(typeKey);
 		if (!list || list.length === 0) continue;
 		const isAgentType = typeKey === "agent" || typeKey === "trading_agent";
-		const { scale, featured } = layoutForType(typeKey, computedRadii);
+		// Grid layout uses CELL_SIZE/sub-grid spacing instead of per-type
+		// ring radii, so the dynamic-radii Map (computedRadii) that older
+		// ring layouts threaded through is no longer computed in this
+		// scope. layoutForType still accepts it as an optional argument
+		// for compatibility but it's not needed here — drop it to avoid
+		// the ReferenceError that landed in commit 3fdf721.
+		const { scale, featured } = layoutForType(typeKey);
 		const { color, hex } = colorForType(typeKey);
 		const surface = planetTextureFor(typeKey, hex);
 		const origin = cellOrigin(tIdx);
