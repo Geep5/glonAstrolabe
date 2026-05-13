@@ -30,6 +30,35 @@ import { showPaymentModal } from "./payment-modal.js";
 	import { getRender, setRender, clearRender, applyToMesh, updateOverlays } from "./planet-styles.js";
 	import { initPhysics } from "./physics.js";
 
+	// ── Layout reset helper ─────────────────────────────────────────
+	// Wipes every glonAstrolabe.* localStorage key (panel positions,
+	// sizes, collapsed states, hidden states). Triggerable two ways:
+	//
+	//   1. URL query param: open ?reset-layout — wipes + reloads without
+	//      the param so the next nav is clean.
+	//   2. Dev console: call glonResetLayout() any time.
+	//
+	// Either path restores every panel to its HTML/CSS-declared default
+	// position, size, and visibility.
+	function glonResetLayout() {
+		const keys = [];
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i);
+			if (k && k.startsWith("glonAstrolabe.")) keys.push(k);
+		}
+		for (const k of keys) localStorage.removeItem(k);
+		console.info(`[glonAstrolabe] reset ${keys.length} localStorage entr${keys.length === 1 ? "y" : "ies"}`);
+		return keys.length;
+	}
+	if (typeof window !== "undefined") window.glonResetLayout = glonResetLayout;
+	if (typeof window !== "undefined" && window.location?.search?.includes("reset-layout")) {
+		glonResetLayout();
+		// Strip the param and reload so the user lands on a clean URL.
+		const url = new URL(window.location.href);
+		url.searchParams.delete("reset-layout");
+		window.location.replace(url.toString());
+	}
+
 	// ── State ──────────────────────────────────────────────────────────
 let snapshot = null;
 
