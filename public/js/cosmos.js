@@ -527,16 +527,31 @@ export function buildCosmos(state, materials) {
 		return out;
 	}
 
-	// Count-ascending order: smallest types sit closest to the sun,
-	// largest types push outward. Each ring's final radius is the max
-	// of three constraints:
+	// Count-ascending order: smallest non-agent types sit closest to
+	// the sun, largest push outward. The agent type is special-cased
+	// to the OUTERMOST local position — it sits at the perimeter of
+	// the local content layer rather than in tight orbit around the
+	// sun. Conceptually, the agent is the gateway between "my stuff"
+	// (inside) and "the world beyond" (anchor halo + remote peers).
+	//
+	// Each ring's final radius is the max of three constraints:
 	//   - MIN_INNER_RADIUS   (closest a ring can sit to the sun)
 	//   - spacingFloor       (room for its own items at MIN_ARC_SPACING)
 	//   - prevRadius + GAP   (visible separation from the previous ring)
-	// As inner rings grow to accommodate more items, outer rings rebase
-	// off the actual (post-growth) radius so they never overlap.
+	// As inner rings grow to accommodate more items, outer rings
+	// rebase off the actual (post-growth) radius so they never overlap.
 	const primaryRingPosition = new Map();
-	const sortedBuckets = [...buckets.entries()].sort((a, b) => a[1].length - b[1].length);
+	const agentTypeKeys = new Set(["agent", "trading_agent"]);
+	const agentBuckets = [];
+	const otherBuckets = [];
+	for (const [typeKey, ids] of buckets) {
+		if (agentTypeKeys.has(typeKey)) agentBuckets.push([typeKey, ids]);
+		else otherBuckets.push([typeKey, ids]);
+	}
+	// Non-agent: count-ascending inner-out.
+	otherBuckets.sort((a, b) => a[1].length - b[1].length);
+	// Agent: always last, so it lands at the outer perimeter.
+	const sortedBuckets = [...otherBuckets, ...agentBuckets];
 	let prevRadius = 0;
 	for (const [, ids] of sortedBuckets) {
 		const N = ids.length;
@@ -547,7 +562,7 @@ export function buildCosmos(state, materials) {
 		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
 		prevRadius = radius;
 	}
-	const localOuterRadius = prevRadius;     // outermost LOCAL content ring
+	const localOuterRadius = prevRadius;     // outermost LOCAL content ring (now ends with agent)
 
 	// Anchor spiral: walk the chain once here, cap visible anchors at
 	// MAX_VISIBLE_ANCHORS, and prune byType.get("chain.anchor") down to
