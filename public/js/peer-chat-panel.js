@@ -109,7 +109,6 @@ async function poll() {
 	} catch (err) {
 		console.error("[peer-chat] poll: network error", err);
 		PEER_CHAT_STATUS.textContent = `network: ${err?.message ?? String(err)}`;
-	}
 	} finally {
 		state.pollInflight = false;
 	}
