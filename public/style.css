@@ -1192,14 +1192,14 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 .spell-bar {
 	position: fixed;
 	left: 50%;
-	bottom: 14px;
+	bottom: 6px;
 	transform: translateX(-50%);
 	display: flex;
 	gap: 6px;
 	padding: 6px 8px;
 	background: rgba(8, 10, 18, 0.86);
 	border: 1px solid rgba(94, 234, 212, 0.18);
-	border-radius: 10px;
+	border-radius: 10px 10px 0 0;       /* square bottom — bar hugs the viewport edge */
 	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55), 0 0 14px rgba(94, 234, 212, 0.06);
 	z-index: 950;
 	backdrop-filter: blur(6px);
