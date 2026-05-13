@@ -26,6 +26,7 @@ import { showPaymentModal } from "./payment-modal.js";
 	import { initNetworkPanel } from "./network-panel.js";
 	import { initPeerChatPanel, openPeerChat } from "./peer-chat-panel.js";
 	import { initPeerDetailPanel, openPeerDetail } from "./peer-detail-panel.js";
+	import { initSpellBar } from "./spell-bar.js";
 	import { getRender, setRender, clearRender, applyToMesh, updateOverlays } from "./planet-styles.js";
 	import { initPhysics } from "./physics.js";
 
@@ -83,6 +84,7 @@ const materials = {
 		initNetworkPanel();
 		initPeerChatPanel();
 		initPeerDetailPanel();
+		initSpellBar();
 		setupThree();
 		buildScenes();
 		bindUI();
