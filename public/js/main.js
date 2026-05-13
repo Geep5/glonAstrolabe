@@ -1014,20 +1014,29 @@ function bindUI() {
 		applyTimeFilter();
 	});
 
-		// Draggable panels — whole top 36px is the grab area
-		makeDraggable("legend",    null, "glonAstrolabe.panelPos.legend");
-		makeDraggable("jobs",      null, "glonAstrolabe.panelPos.jobs");
-		makeDraggable("tasks",     null, "glonAstrolabe.panelPos.tasks");
-		makeDraggable("inspector", null, "glonAstrolabe.panelPos.inspector");
-		makeDraggable("crypto",    null, "glonAstrolabe.panelPos.crypto");
-		makeDraggable("livelog",   null, "glonAstrolabe.panelPos.livelog");
-		// Resizable panels — bottom-right corner handle
-		makeResizable("legend",    "glonAstrolabe.panelSize.legend");
-		makeResizable("jobs",      "glonAstrolabe.panelSize.jobs");
-		makeResizable("tasks",     "glonAstrolabe.panelSize.tasks");
-		makeResizable("inspector", "glonAstrolabe.panelSize.inspector");
-		makeResizable("crypto",    "glonAstrolabe.panelSize.crypto");
-		makeResizable("livelog",   "glonAstrolabe.panelSize.livelog");
+		// Draggable panels — whole top 36px is the grab area. Positions
+		// persist to localStorage under panelPos.<id> and reload on next
+		// page open. All nine spell-bar-tracked panels are covered.
+		makeDraggable("legend",      null, "glonAstrolabe.panelPos.legend");
+		makeDraggable("jobs",        null, "glonAstrolabe.panelPos.jobs");
+		makeDraggable("tasks",       null, "glonAstrolabe.panelPos.tasks");
+		makeDraggable("inspector",   null, "glonAstrolabe.panelPos.inspector");
+		makeDraggable("crypto",      null, "glonAstrolabe.panelPos.crypto");
+		makeDraggable("livelog",     null, "glonAstrolabe.panelPos.livelog");
+		makeDraggable("network",     null, "glonAstrolabe.panelPos.network");
+		makeDraggable("peer-detail", null, "glonAstrolabe.panelPos.peer-detail");
+		makeDraggable("peer-chat",   null, "glonAstrolabe.panelPos.peer-chat");
+		// Resizable panels — bottom-right corner handle. Sizes persist to
+		// localStorage under panelSize.<id>.
+		makeResizable("legend",      "glonAstrolabe.panelSize.legend");
+		makeResizable("jobs",        "glonAstrolabe.panelSize.jobs");
+		makeResizable("tasks",       "glonAstrolabe.panelSize.tasks");
+		makeResizable("inspector",   "glonAstrolabe.panelSize.inspector");
+		makeResizable("crypto",      "glonAstrolabe.panelSize.crypto");
+		makeResizable("livelog",     "glonAstrolabe.panelSize.livelog");
+		makeResizable("network",     "glonAstrolabe.panelSize.network");
+		makeResizable("peer-detail", "glonAstrolabe.panelSize.peer-detail");
+		makeResizable("peer-chat",   "glonAstrolabe.panelSize.peer-chat");
 
 		// Collapsible panels
 		document.querySelectorAll(".panel-collapse").forEach((btn) => {
