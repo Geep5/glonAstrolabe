@@ -94,38 +94,45 @@
 	</aside>
 
 	<!-- Spell bar: WoW-style action bar at the bottom of the screen.
-	     Each slot toggles a UI panel/window. Icon placeholders for now;
-	     real icons + user-configurable keybindings live in a future
-	     settings pane. Slots opt in via data-panel (collapsible asides)
-	     or data-overlay (hidden-attribute overlays). -->
+	     Two rows of slots; each slot toggles a UI panel/window via
+	     the `hidden` attribute on its target (full hide, no peeking).
+	     Real icons + user-configurable keybinds live in a future
+	     settings pane. Each slot opts in via data-target. -->
 	<nav id="spell-bar" class="spell-bar" aria-label="UI window quick-launch">
-		<button class="spell-slot" data-panel="legend"    data-key="1" type="button" title="Legend">
-			<span class="spell-glyph">L</span><span class="spell-key">1</span>
-		</button>
-		<button class="spell-slot" data-panel="jobs"      data-key="2" type="button" title="AI jobs">
-			<span class="spell-glyph">J</span><span class="spell-key">2</span>
-		</button>
-		<button class="spell-slot" data-panel="tasks"     data-key="3" type="button" title="Tasks">
-			<span class="spell-glyph">T</span><span class="spell-key">3</span>
-		</button>
-		<button class="spell-slot" data-panel="crypto"    data-key="4" type="button" title="Coins">
-			<span class="spell-glyph">C</span><span class="spell-key">4</span>
-		</button>
-		<button class="spell-slot" data-panel="network"   data-key="5" type="button" title="Network">
-			<span class="spell-glyph">N</span><span class="spell-key">5</span>
-		</button>
-		<button class="spell-slot" data-overlay="peer-detail" data-key="6" type="button" title="Peer detail">
-			<span class="spell-glyph">P</span><span class="spell-key">6</span>
-		</button>
-		<button class="spell-slot" data-overlay="peer-chat"   data-key="7" type="button" title="Peer chat">
-			<span class="spell-glyph">⌨</span><span class="spell-key">7</span>
-		</button>
-		<button class="spell-slot" data-panel="inspector" data-key="8" type="button" title="Inspector">
-			<span class="spell-glyph">I</span><span class="spell-key">8</span>
-		</button>
-		<button class="spell-slot" data-panel="livelog"   data-key="9" type="button" title="Live log">
-			<span class="spell-glyph">⚡</span><span class="spell-key">9</span>
-		</button>
+		<div class="spell-row">
+			<button class="spell-slot" data-target="legend"      data-key="1" type="button" title="Legend">
+				<span class="spell-glyph">L</span><span class="spell-key">1</span>
+			</button>
+			<button class="spell-slot" data-target="jobs"        data-key="2" type="button" title="AI jobs">
+				<span class="spell-glyph">J</span><span class="spell-key">2</span>
+			</button>
+			<button class="spell-slot" data-target="tasks"       data-key="3" type="button" title="Tasks">
+				<span class="spell-glyph">T</span><span class="spell-key">3</span>
+			</button>
+			<button class="spell-slot" data-target="crypto"      data-key="4" type="button" title="Coins">
+				<span class="spell-glyph">C</span><span class="spell-key">4</span>
+			</button>
+			<button class="spell-slot" data-target="network"     data-key="5" type="button" title="Network">
+				<span class="spell-glyph">N</span><span class="spell-key">5</span>
+			</button>
+		</div>
+		<div class="spell-row">
+			<button class="spell-slot" data-target="peer-detail" data-key="6" type="button" title="Peer detail">
+				<span class="spell-glyph">P</span><span class="spell-key">6</span>
+			</button>
+			<button class="spell-slot" data-target="peer-chat"   data-key="7" type="button" title="Peer chat">
+				<span class="spell-glyph">⌨</span><span class="spell-key">7</span>
+			</button>
+			<button class="spell-slot" data-target="chat-dock"   data-key="8" type="button" title="AI chat (your agents)">
+				<span class="spell-glyph">💬</span><span class="spell-key">8</span>
+			</button>
+			<button class="spell-slot" data-target="inspector"   data-key="9" type="button" title="Inspector">
+				<span class="spell-glyph">I</span><span class="spell-key">9</span>
+			</button>
+			<button class="spell-slot" data-target="livelog"     data-key="0" type="button" title="Live log / combat log">
+				<span class="spell-glyph">⚡</span><span class="spell-key">0</span>
+			</button>
+		</div>
 	</nav>
 
 	<!-- Peer detail panel. Opens when you click a remote peer's sun.

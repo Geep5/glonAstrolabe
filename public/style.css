@@ -1195,7 +1195,8 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	bottom: 6px;
 	transform: translateX(-50%);
 	display: flex;
-	gap: 6px;
+	flex-direction: column;             /* stack rows vertically */
+	gap: 4px;
 	padding: 6px 8px;
 	background: rgba(8, 10, 18, 0.86);
 	border: 1px solid rgba(94, 234, 212, 0.18);
@@ -1204,6 +1205,17 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	z-index: 950;
 	backdrop-filter: blur(6px);
 }
+.spell-row {
+	display: flex;
+	gap: 6px;
+}
+
+/* Spell-bar slot toggles #chat-dock visibility. `.chat-window` children
+ * are position:fixed but descendants of chat-dock — so display:none on
+ * the dock (which is what the `hidden` attribute applies) hides them
+ * regardless of their own positioning. Defensive belt-and-suspenders
+ * rule below makes the intent explicit. */
+#chat-dock[hidden] .chat-window { display: none !important; }
 .spell-slot {
 	position: relative;
 	width: 44px;
