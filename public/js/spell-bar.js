@@ -1,56 +1,43 @@
 // Spell bar — bottom-of-screen quick-launch for UI windows.
 //
-// WoW-style action bar: a row of square slots, each bound to one panel
-// or overlay. Click toggles open/closed. The bar is the only place that
-// knows about which panels exist; opt-in is by markup (data-panel or
-// data-overlay attributes on the slot buttons in index.html).
+// WoW-style action bar: a row of square slots, each bound to one panel.
+// Click (or press the slot's data-key) toggles the panel between fully
+// visible and fully hidden via the `hidden` HTML attribute.
 //
-// Two toggle modes:
+// No half-open / collapsed state from this surface — the spell bar is
+// a "is this window on the screen or not?" affordance. Panels reappear
+// in the exact same position they were before being hidden, since
+// their layout is fixed/absolute in CSS and we're only flipping
+// visibility, not removing them from the DOM. The in-panel
+// `.panel-collapse` button (─/▲) still exists for users who want a
+// partial-collapse state; this surface is orthogonal to that.
 //
-//   data-panel="<id>"     — target is a collapsible <aside>. Toggles the
-//                           `.collapsed` class and updates the local
-//                           `.panel-collapse` button's glyph/title so
-//                           the two affordances stay in sync.
-//
-//   data-overlay="<id>"   — target is an overlay (peer-chat, peer-detail).
-//                           Toggles the `hidden` attribute.
+// Slots use a unified data-target attribute (or the legacy data-panel /
+// data-overlay attributes are still accepted) to name the element id
+// they control.
 //
 // Active state on the slot is driven by a MutationObserver per target so
-// the bar lights up regardless of how the panel was toggled (slot click,
-// in-panel collapse button, or programmatic open from elsewhere).
+// the bar lights up regardless of how the panel was toggled.
+
+function targetIdOf(slot) {
+	return slot.dataset.target || slot.dataset.panel || slot.dataset.overlay || "";
+}
 
 function isOpenPanel(el) {
 	if (!el) return false;
-	if (el.hasAttribute("hidden")) return false;
-	if (el.classList.contains("collapsed")) return false;
-	return true;
-}
-
-function syncCollapseButton(panel) {
-	const btn = panel?.querySelector?.(".panel-collapse");
-	if (!btn) return;
-	const collapsed = panel.classList.contains("collapsed");
-	btn.textContent = collapsed ? "▲" : "─";
-	btn.title = collapsed ? "Expand" : "Collapse";
+	return !el.hasAttribute("hidden");
 }
 
 function toggleSlot(slot) {
-	const panelId   = slot.dataset.panel;
-	const overlayId = slot.dataset.overlay;
-	if (panelId) {
-		const panel = document.getElementById(panelId);
-		if (!panel) return;
-		panel.classList.toggle("collapsed");
-		syncCollapseButton(panel);
-	} else if (overlayId) {
-		const overlay = document.getElementById(overlayId);
-		if (!overlay) return;
-		overlay.hidden = !overlay.hidden;
-	}
+	const targetId = targetIdOf(slot);
+	if (!targetId) return;
+	const target = document.getElementById(targetId);
+	if (!target) return;
+	target.hidden = !target.hidden;
 }
 
 function paintSlotActive(slot) {
-	const target = document.getElementById(slot.dataset.panel || slot.dataset.overlay);
+	const target = document.getElementById(targetIdOf(slot));
 	slot.classList.toggle("active", isOpenPanel(target));
 }
 
@@ -79,15 +66,14 @@ export function initSpellBar() {
 			toggleSlot(slot);
 		});
 		// Initial paint + observer for state-sync.
-		const targetId = slot.dataset.panel || slot.dataset.overlay;
+		const targetId = targetIdOf(slot);
 		const target = targetId ? document.getElementById(targetId) : null;
 		paintSlotActive(slot);
 		if (target) {
-			// Watch for class (.collapsed) and hidden-attribute changes so
-			// the slot's "active" glow reflects reality regardless of
-			// who toggled the panel.
+			// Watch hidden-attribute changes so the slot's "active" glow
+			// reflects reality regardless of who toggled the panel.
 			const obs = new MutationObserver(() => paintSlotActive(slot));
-			obs.observe(target, { attributes: true, attributeFilter: ["class", "hidden"] });
+			obs.observe(target, { attributes: true, attributeFilter: ["hidden"] });
 		}
 		// Index by data-key for the keyboard handler.
 		const key = slot.dataset.key;
