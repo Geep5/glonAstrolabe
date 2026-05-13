@@ -28,12 +28,17 @@ function isOpenPanel(el) {
 	return !el.hasAttribute("hidden");
 }
 
+function storageKeyFor(targetId) {
+	return `glonAstrolabe.panelHidden.${targetId}`;
+}
+
 function toggleSlot(slot) {
 	const targetId = targetIdOf(slot);
 	if (!targetId) return;
 	const target = document.getElementById(targetId);
 	if (!target) return;
 	target.hidden = !target.hidden;
+	try { localStorage.setItem(storageKeyFor(targetId), target.hidden ? "1" : "0"); } catch {}
 }
 
 function paintSlotActive(slot) {
@@ -65,9 +70,20 @@ export function initSpellBar() {
 			e.preventDefault();
 			toggleSlot(slot);
 		});
-		// Initial paint + observer for state-sync.
+		// Restore saved hidden state. If the user last hid this panel
+		// via the spell bar (or with the click handler in this module),
+		// reapply that. Default to leaving the panel's HTML-declared
+		// state alone — so overlays that ship with `hidden` stay
+		// hidden, and asides without `hidden` stay visible.
 		const targetId = targetIdOf(slot);
 		const target = targetId ? document.getElementById(targetId) : null;
+		if (target) {
+			try {
+				const saved = localStorage.getItem(storageKeyFor(targetId));
+				if (saved === "1") target.hidden = true;
+				else if (saved === "0") target.hidden = false;
+			} catch {}
+		}
 		paintSlotActive(slot);
 		if (target) {
 			// Watch hidden-attribute changes so the slot's "active" glow

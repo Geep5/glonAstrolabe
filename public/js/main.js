@@ -1038,17 +1038,33 @@ function bindUI() {
 		makeResizable("peer-detail", "glonAstrolabe.panelSize.peer-detail");
 		makeResizable("peer-chat",   "glonAstrolabe.panelSize.peer-chat");
 
-		// Collapsible panels
+		// Collapsible panels — `.collapsed` class is the partial-collapse
+		// state (header visible, body hidden) driven by the in-panel
+		// ─/▲ button. Distinct from the spell bar's hide/show (which
+		// uses the `hidden` attribute). Both states persist independently
+		// in localStorage so reloading the page restores exactly what
+		// the user last had visible.
 		document.querySelectorAll(".panel-collapse").forEach((btn) => {
 			const panelId = btn.dataset.panel;
 			const panel = document.getElementById(panelId);
 			if (!panel) return;
+			const storageKey = `glonAstrolabe.panelCollapsed.${panelId}`;
+			// Restore saved collapsed state on init.
+			try {
+				const saved = localStorage.getItem(storageKey);
+				if (saved === "1") {
+					panel.classList.add("collapsed");
+					btn.textContent = "▲";
+					btn.title = "Expand";
+				}
+			} catch {}
 			btn.addEventListener("pointerdown", (e) => {
 				e.stopPropagation(); // prevent panel drag from starting
 			});
 			btn.addEventListener("click", (e) => {
 				e.stopPropagation();
 				const collapsed = panel.classList.toggle("collapsed");
+				try { localStorage.setItem(storageKey, collapsed ? "1" : "0"); } catch {}
 				btn.textContent = collapsed ? "▲" : "─";
 				btn.title = collapsed ? "Expand" : "Collapse";
 			});
