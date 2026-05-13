@@ -156,21 +156,18 @@ function setupThree() {
 	scene = new THREE.Scene();
 	scene.fog = new THREE.Fog(0x000000, 40, 140);
 
-	// "Invisible giant in the middle of the galaxy" framing: the camera
-	// starts inside the cosmos at the giant's head height. The lower
-	// hemisphere is the belly — the floor of nodes; the upper hemisphere
-	// is the sky above. Every type Fibonacci-distributes around this
-	// point, so anywhere the camera looks there is content.
+	// "Invisible giant in the middle of the galaxy" framing — but at
+	// page load, the giant is standing BACK so the user gets a wide
+	// overview of the whole solar system: sun, content rings, anchor
+	// halo, peer void, and remote glons all in frame at once. WASD /
+	// scroll-zoom can then take them in closer.
+	//
+	// Previous default (0, 6, 0) put the camera right at the sun's
+	// corona edge, which felt like spawning *inside* the sun.
 	camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 400);
-	camera.position.set(0, 6, 0);
-	// Start pitched harder and yawed slightly off-axis so the camera
-	// opens onto the ring as a RING (a wide arc of nodes below) rather
-	// than staring at whichever single node happens to be at 12-o'clock.
-	// Previous (-0.35, 0) put the first-priority type (agent) dead-center.
-	const initialPitch = -0.65; // ~37° down — ring reads as a ring
-	const initialYaw = 0.3;     // ~17° off-axis — no node dead-center
+	camera.position.set(0, 40, 95);
 	camera.rotation.order = "YXZ";
-	camera.rotation.set(initialPitch, initialYaw, 0);
+	camera.lookAt(0, 0, 0);
 
 	controls = new OrbitControls(camera, canvas);
 	// Mouse rotation is handled by our own yaw/pitch handler below
