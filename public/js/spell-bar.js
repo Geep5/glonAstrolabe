@@ -54,10 +54,23 @@ function paintSlotActive(slot) {
 	slot.classList.toggle("active", isOpenPanel(target));
 }
 
+// True if the user is currently editing text (input, textarea, or any
+// contenteditable). We DON'T want the number keys to toggle panels
+// when the user is typing into the chat input or the search bar.
+function userIsTyping() {
+	const el = document.activeElement;
+	if (!el) return false;
+	const tag = el.tagName;
+	if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+	if (el.isContentEditable) return true;
+	return false;
+}
+
 export function initSpellBar() {
 	const bar = document.getElementById("spell-bar");
 	if (!bar) return;
 	const slots = [...bar.querySelectorAll(".spell-slot")];
+	const slotByKey = new Map();      // "1" → slot element
 
 	for (const slot of slots) {
 		// Click toggles the target.
@@ -76,5 +89,28 @@ export function initSpellBar() {
 			const obs = new MutationObserver(() => paintSlotActive(slot));
 			obs.observe(target, { attributes: true, attributeFilter: ["class", "hidden"] });
 		}
+		// Index by data-key for the keyboard handler.
+		const key = slot.dataset.key;
+		if (key) slotByKey.set(key, slot);
 	}
+
+	// Keyboard handler: pressing 1–9 (or whatever data-key each slot
+	// declares) toggles that slot's panel. Skipped when the user is
+	// typing into an input/textarea/contenteditable so chat / search
+	// boxes still capture digits normally.
+	//
+	// No modifier keys required — bare digit. Ignores keypresses with
+	// Ctrl/Meta/Alt held so browser shortcuts (Ctrl+1 = first tab,
+	// etc.) still work.
+	document.addEventListener("keydown", (e) => {
+		if (e.ctrlKey || e.metaKey || e.altKey) return;
+		if (userIsTyping()) return;
+		const slot = slotByKey.get(e.key);
+		if (!slot) return;
+		e.preventDefault();
+		toggleSlot(slot);
+		// Brief active flash so the user sees the keypress registered.
+		slot.classList.add("spell-flash");
+		setTimeout(() => slot.classList.remove("spell-flash"), 120);
+	});
 }

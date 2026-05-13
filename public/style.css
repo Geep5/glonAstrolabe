@@ -1246,6 +1246,11 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	color: var(--text-muted);
 	opacity: 0.7;
 }
+.spell-slot.spell-flash {
+	background: rgba(255, 198, 107, 0.25);
+	border-color: rgba(255, 198, 107, 0.9);
+	transition: background 0.08s, border-color 0.08s;
+}
 .network-action {
 	font: 10px/1 ui-monospace, "SF Mono", monospace;
 	padding: 3px 8px;
