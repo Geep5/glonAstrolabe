@@ -1216,6 +1216,16 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
  * regardless of their own positioning. Defensive belt-and-suspenders
  * rule below makes the intent explicit. */
 #chat-dock[hidden] .chat-window { display: none !important; }
+
+/* `hidden` attribute MUST hide regardless of any later CSS that
+ * declares display:flex/grid/block on the same element. The browser's
+ * user-agent stylesheet provides `[hidden] { display: none }` with
+ * specificity (0,0,1), which is beaten by any id rule like
+ * `#livelog { display: flex }`. The spell bar uses `hidden` as its
+ * sole toggle — if a panel's later CSS declares `display`, the
+ * toggle silently fails. This rule restores intent with
+ * !important + id-equivalent specificity. */
+[hidden] { display: none !important; }
 .spell-slot {
 	position: relative;
 	width: 44px;
