@@ -15,6 +15,21 @@ let AUCTIONS_COUNT  = null;
 let AUCTIONS_STATUS = null;
 let lastRender = "";
 
+/** Local chain pubkeys (from /api/wallet) — used to detect "my auction". */
+let LOCAL_WALLET_KEYS = new Set();
+
+/** Auction IDs whose bids the user has expanded inline. Persists across polls. */
+const expandedAuctions = new Set();
+
+async function loadWalletKeys() {
+	try {
+		const r = await fetch("/api/wallet").then((res) => res.json());
+		LOCAL_WALLET_KEYS = new Set(r?.pubkeys ?? []);
+	} catch {
+		LOCAL_WALLET_KEYS = new Set();
+	}
+}
+
 function shortKey(key) {
 	if (!key || typeof key !== "string") return "";
 	return key.length > 16 ? key.slice(0, 12) + "…" : key;
@@ -121,23 +136,39 @@ async function refresh() {
 	const nowMs = Date.now();
 	const html = sorted.map((row) => {
 		const give = (row.give ?? []).map(fmtAsset).join(" + ");
-		const want = (row.want ?? []).map(fmtAsset).join(" + ") || "<span class='muted'>(gift)</span>";
+		const wantParts = row.want ?? [];
+		const want = wantParts.length > 0
+			? wantParts.map(fmtAsset).join(" + ")
+			: (row.recipient_pubkey ? "<span class='muted'>(gift)</span>" : "<span class='muted'>(open — any offer)</span>");
 		const sellerShort = shortKey(row.seller_pubkey);
+		const isMine = LOCAL_WALLET_KEYS.has(row.seller_pubkey);
 		const recipient = row.recipient_pubkey ? ` → ${shortKey(row.recipient_pubkey)}` : "";
-		const cancelBtn = (row.status === "open" && row.seller_pubkey === status.writer_pubkey)
-			? `<button class="auction-cancel" data-id="${escapeHtml(row.id)}">cancel</button>`
-			: "";
 		const expiry = expiryLabel(row, nowMs);
 		// Stale = open in the view but past its deadline (no op has touched it
 		// yet to trigger lazy-expire). Show as a soft warning.
 		const isStale = row.status === "open" && typeof row.expiry_ms === "number" && row.expiry_ms <= nowMs;
 		const expiryCls = isStale ? "auction-expiry stale" : "auction-expiry";
+		const isOpen = row.status === "open";
+		const expanded = expandedAuctions.has(row.id);
+
+		const cancelBtn = (isOpen && isMine)
+			? `<button class="auction-cancel" data-id="${escapeHtml(row.id)}">cancel</button>`
+			: "";
+		// Bid / bids actions are only meaningful for open auctions.
+		// Non-mine open auctions get a "bid" button; mine and others both get
+		// a "bids" toggle to see all current bids.
+		const actions = isOpen ? `
+			<button class="auction-bids-toggle" data-id="${escapeHtml(row.id)}">${expanded ? "▾" : "▸"} bids</button>
+			${!isMine ? `<button class="auction-bid-open" data-id="${escapeHtml(row.id)}">+ bid</button>` : ""}
+		` : "";
+
 		return `
-			<li class="auction-row" data-id="${escapeHtml(row.id)}">
+			<li class="auction-row${isMine ? " mine" : ""}" data-id="${escapeHtml(row.id)}">
 				<div class="auction-line">
 					<span class="auction-id">${escapeHtml(row.id.slice(0, 12))}</span>
 					${statusBadge(row.status)}
 					${expiry ? `<span class="${expiryCls}">${escapeHtml(expiry)}</span>` : ""}
+					${isMine ? `<span class="auction-mine-badge">you</span>` : ""}
 				</div>
 				<div class="auction-terms">
 					<span class="give">${give}</span>
@@ -146,8 +177,10 @@ async function refresh() {
 				</div>
 				<div class="auction-meta muted small">
 					<span class="seller">seller ${sellerShort}${recipient}</span>
-					${cancelBtn}
+					<span class="auction-row-actions">${cancelBtn} ${actions}</span>
 				</div>
+				${expanded ? `<div class="auction-bids" data-bids-id="${escapeHtml(row.id)}"><div class="muted small">loading bids…</div></div>` : ""}
+				<div class="auction-bid-form-host" data-bid-host-id="${escapeHtml(row.id)}"></div>
 			</li>
 		`;
 	}).join("");
@@ -155,24 +188,167 @@ async function refresh() {
 	if (html !== lastRender) {
 		AUCTIONS_LIST.innerHTML = html;
 		lastRender = html;
-		wireCancels();
+		wireRowActions(status);
+		// Repopulate expanded bid sections.
+		for (const id of expandedAuctions) loadBidsInto(id, status);
 	}
 }
 
-function wireCancels() {
+function wireRowActions(status) {
+	// Cancel: seller closes their own open auction.
 	for (const btn of AUCTIONS_LIST.querySelectorAll(".auction-cancel")) {
 		btn.addEventListener("click", async (e) => {
 			const id = e.currentTarget.getAttribute("data-id");
 			if (!id) return;
 			try {
 				await postAction("/api/auctions/cancel", { auctionId: id, keyName: "default" });
-				lastRender = ""; // force redraw
+				lastRender = "";
 				refresh();
 			} catch (err) {
 				alert("Cancel failed: " + (err.message ?? err));
 			}
 		});
 	}
+
+	// Toggle bids inline.
+	for (const btn of AUCTIONS_LIST.querySelectorAll(".auction-bids-toggle")) {
+		btn.addEventListener("click", (e) => {
+			const id = e.currentTarget.getAttribute("data-id");
+			if (!id) return;
+			if (expandedAuctions.has(id)) expandedAuctions.delete(id);
+			else expandedAuctions.add(id);
+			lastRender = ""; // force redraw with new expanded state
+			refresh();
+		});
+	}
+
+	// Open inline bid form for non-self auctions.
+	for (const btn of AUCTIONS_LIST.querySelectorAll(".auction-bid-open")) {
+		btn.addEventListener("click", (e) => {
+			const id = e.currentTarget.getAttribute("data-id");
+			openBidForm(id);
+		});
+	}
+}
+
+function openBidForm(auctionId) {
+	const host = AUCTIONS_LIST.querySelector(`.auction-bid-form-host[data-bid-host-id="${cssEscape(auctionId)}"]`);
+	if (!host) return;
+	if (host.querySelector("form")) return; // already open
+	host.innerHTML = `
+		<form class="auction-bid-form" data-auction-id="${escapeHtml(auctionId)}">
+			<label class="auctions-field">
+				<span>offer</span>
+				<input name="offer" placeholder="50 <token_id>" required />
+			</label>
+			<label class="auctions-field">
+				<span>signing key</span>
+				<input name="keyName" value="default" required />
+			</label>
+			<div class="auctions-form-actions">
+				<button type="submit" class="auctions-submit">submit bid</button>
+				<button type="button" class="auctions-cancel-btn" data-action="cancel-bid">cancel</button>
+			</div>
+			<div class="auctions-form-error muted small"></div>
+		</form>
+	`;
+	const form = host.querySelector("form");
+	form.querySelector('input[name="offer"]').focus();
+	form.querySelector('[data-action="cancel-bid"]').addEventListener("click", () => {
+		host.innerHTML = "";
+	});
+	form.addEventListener("submit", async (e) => {
+		e.preventDefault();
+		const errEl = form.querySelector(".auctions-form-error");
+		errEl.textContent = "";
+		const data = new FormData(form);
+		const offer = parseAssetField(data.get("offer"));
+		if (!offer) { errEl.textContent = "offer required (form: <amount> <token_id>)"; return; }
+		const keyName = (data.get("keyName") ?? "default").toString().trim();
+		try {
+			await postAction("/api/auctions/bid", {
+				auctionId,
+				offer: [offer],
+				keyName,
+			});
+			host.innerHTML = "";
+			expandedAuctions.add(auctionId); // pop bids open so the seller sees it
+			lastRender = "";
+			refresh();
+		} catch (err) {
+			errEl.textContent = err.message ?? String(err);
+		}
+	});
+}
+
+async function loadBidsInto(auctionId, status) {
+	const host = AUCTIONS_LIST.querySelector(`.auction-bids[data-bids-id="${cssEscape(auctionId)}"]`);
+	if (!host) return;
+	try {
+		const r = await fetch(`/api/auctions/${encodeURIComponent(auctionId)}/bids`).then((res) => res.json());
+		if (!r?.ok) { host.innerHTML = `<div class="muted small">${escapeHtml(r?.error ?? "no bids")}</div>`; return; }
+		const bids = r.bids ?? [];
+		if (bids.length === 0) {
+			host.innerHTML = `<div class="muted small">no bids yet</div>`;
+			return;
+		}
+		// Find the seller's pubkey from the auction row to decide whether to
+		// show Accept buttons. Cheap re-lookup from the live API state.
+		const auctionRes = await fetch(`/api/auctions/${encodeURIComponent(auctionId)}`).then((res) => res.json());
+		const auction = auctionRes?.auction;
+		const sellerIsMe = auction && LOCAL_WALLET_KEYS.has(auction.seller_pubkey);
+
+		host.innerHTML = bids.map((bid) => {
+			const offerStr = (bid.offer ?? []).map(fmtAsset).join(" + ") || "<span class='muted'>(empty)</span>";
+			const bidderShort = shortKey(bid.bidder_pubkey);
+			const ageMs = Date.now() - (bid.created_at ?? 0);
+			const ageSec = Math.max(0, Math.floor(ageMs / 1000));
+			const acceptBtn = sellerIsMe ? `
+				<button class="auction-accept-bid"
+				        data-auction="${escapeHtml(auctionId)}"
+				        data-winner="${escapeHtml(bid.bidder_pubkey)}"
+				        data-at="${bid.created_at}">accept</button>
+			` : "";
+			return `
+				<div class="auction-bid-row">
+					<div class="auction-bid-line">
+						<span class="auction-bid-bidder">${bidderShort}</span>
+						<span class="auction-bid-age muted small">${formatSecsAgo(ageSec)}</span>
+						${acceptBtn}
+					</div>
+					<div class="auction-bid-offer">${offerStr}</div>
+				</div>
+			`;
+		}).join("");
+		// Wire accept buttons.
+		for (const btn of host.querySelectorAll(".auction-accept-bid")) {
+			btn.addEventListener("click", async (e) => {
+				const auctionId = e.currentTarget.getAttribute("data-auction");
+				const winner = e.currentTarget.getAttribute("data-winner");
+				const at = parseInt(e.currentTarget.getAttribute("data-at"), 10);
+				try {
+					await postAction("/api/auctions/settle", {
+						auctionId,
+						winner,
+						winningBidAt: at,
+						keyName: "default",
+					});
+					expandedAuctions.delete(auctionId);
+					lastRender = "";
+					refresh();
+				} catch (err) {
+					alert("Accept failed: " + (err.message ?? err));
+				}
+			});
+		}
+	} catch (err) {
+		host.innerHTML = `<div class="muted small">failed: ${escapeHtml(err.message ?? String(err))}</div>`;
+	}
+}
+
+/** Minimal CSS-attribute-escape (just the chars that matter for our IDs). */
+function cssEscape(s) {
+	return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
 }
 
 function parseAssetField(spec) {
@@ -285,7 +461,12 @@ export function initAuctionsPanel() {
 	AUCTIONS_COUNT  = document.getElementById("auctions-count");
 	AUCTIONS_STATUS = document.getElementById("auctions-status");
 	if (!AUCTIONS_PANEL || !AUCTIONS_LIST) return;
-	wireForm();
-	refresh();
-	setInterval(refresh, POLL_MS);
+	loadWalletKeys().then(() => {
+		wireForm();
+		refresh();
+		setInterval(refresh, POLL_MS);
+		// Periodically refresh wallet keys too — handles `wallet new`
+		// happening while astrolabe is open.
+		setInterval(loadWalletKeys, 30_000);
+	});
 }

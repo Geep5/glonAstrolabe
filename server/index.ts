@@ -124,6 +124,15 @@ app.get("/api/auctions/:id", async (req, res) => {
 	}
 });
 
+app.get("/api/auctions/:id/bids", async (req, res) => {
+	try {
+		const bids = await dispatchToDaemon("/auction", "getBids", [req.params.id]);
+		res.json({ ok: true, bids: bids ?? [] });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
 app.post("/api/auctions/post", async (req, res) => {
 	try {
 		const result = await dispatchToDaemon("/auction", "post", [req.body ?? {}]);

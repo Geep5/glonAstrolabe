@@ -2135,6 +2135,95 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 .auctions-mode-hint.mode-gift    { color: #a78bfa; border-left-color: #a78bfa; }
 .auctions-mode-hint.mode-fixed   { color: #ffc857; border-left-color: #ffc857; }
 .auctions-mode-hint.mode-directed { color: #ff8fb1; border-left-color: #ff8fb1; }
+
+.auction-row.mine {
+	background: rgba(94, 234, 212, 0.04);
+	border-left: 2px solid rgba(94, 234, 212, 0.4);
+	padding-left: 4px;
+}
+.auction-mine-badge {
+	background: rgba(94, 234, 212, 0.18);
+	color: #5eead4;
+	font-size: 9px;
+	padding: 1px 4px;
+	border-radius: 2px;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	margin-left: 4px;
+}
+.auction-row-actions {
+	display: inline-flex;
+	gap: 4px;
+}
+.auction-bids-toggle,
+.auction-bid-open {
+	background: transparent;
+	border: 1px solid var(--stroke);
+	color: var(--text-muted);
+	font-size: 10px;
+	padding: 2px 8px;
+	border-radius: 3px;
+	cursor: pointer;
+}
+.auction-bid-open {
+	color: #5eead4;
+	border-color: rgba(94, 234, 212, 0.35);
+}
+.auction-bid-open:hover {
+	background: rgba(94, 234, 212, 0.12);
+}
+.auction-bids {
+	margin-top: 4px;
+	padding: 6px 8px;
+	background: rgba(0, 0, 0, 0.25);
+	border-radius: 3px;
+	border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.auction-bid-row {
+	padding: 4px 0;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.auction-bid-row:last-child { border-bottom: none; }
+.auction-bid-line {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.auction-bid-bidder {
+	font-family: monospace;
+	font-size: 11px;
+	color: var(--text);
+}
+.auction-bid-age {
+	flex: 1;
+}
+.auction-accept-bid {
+	background: #5eead4;
+	color: #0a0c14;
+	border: none;
+	padding: 2px 10px;
+	border-radius: 3px;
+	font-size: 10px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.auction-accept-bid:hover { background: #7aebd9; }
+.auction-bid-offer {
+	margin-top: 2px;
+	font-size: 11px;
+	color: var(--text-muted);
+	padding-left: 4px;
+}
+.auction-bid-form {
+	margin-top: 6px;
+	padding: 8px;
+	background: rgba(255, 255, 255, 0.03);
+	border-radius: 3px;
+	border: 1px solid rgba(94, 234, 212, 0.25);
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
 #auctions.flash {
 	animation: auctions-flash 600ms ease-out;
 }
