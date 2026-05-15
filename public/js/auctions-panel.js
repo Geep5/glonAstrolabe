@@ -39,8 +39,36 @@ function statusBadge(status) {
 	const cls = (status === "open") ? "ok"
 		: (status === "settled") ? "info"
 		: (status === "cancelled") ? "muted"
+		: (status === "expired") ? "muted"
 		: "warn";
 	return `<span class="auction-status ${cls}">${escapeHtml(status ?? "?")}</span>`;
+}
+
+/** Render "23h 45m" / "12m" / "in 3s" / "expired 5m ago". Compact + drift-aware. */
+function expiryLabel(auction, nowMs) {
+	if (!auction || typeof auction.expiry_ms !== "number") return "";
+	if (auction.status === "expired") {
+		const ago = Math.max(0, Math.floor((nowMs - (auction.expired_at ?? auction.expiry_ms)) / 1000));
+		return `expired ${formatSecsAgo(ago)}`;
+	}
+	if (auction.status !== "open") return ""; // settled/cancelled — irrelevant
+	const remainSec = Math.floor((auction.expiry_ms - nowMs) / 1000);
+	if (remainSec <= 0) return "stale (past deadline)";
+	return formatSecsRemaining(remainSec);
+}
+
+function formatSecsRemaining(s) {
+	if (s < 60) return `in ${s}s`;
+	if (s < 3600) return `in ${Math.floor(s / 60)}m`;
+	if (s < 86400) return `in ${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+	return `in ${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+}
+
+function formatSecsAgo(s) {
+	if (s < 60) return `${s}s ago`;
+	if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+	if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+	return `${Math.floor(s / 86400)}d ago`;
 }
 
 async function postAction(url, body) {
@@ -80,9 +108,9 @@ async function refresh() {
 	AUCTIONS_COUNT.textContent = String(auctions.length);
 	AUCTIONS_STATUS.textContent = `writer ${writerShort} · ${status.view_length ?? 0} view entries · ${status.system_length ?? 0} ops`;
 
-	// Sort: open auctions first, then settled, then cancelled. Within
-	// each bucket, newest created_at first.
-	const order = { open: 0, settled: 1, cancelled: 2 };
+	// Sort: open auctions first, then settled, then cancelled, then expired.
+	// Within each bucket, newest created_at first.
+	const order = { open: 0, settled: 1, cancelled: 2, expired: 3 };
 	const sorted = [...auctions].sort((a, b) => {
 		const sa = order[a.status] ?? 99;
 		const sb = order[b.status] ?? 99;
@@ -90,6 +118,7 @@ async function refresh() {
 		return (b.created_at ?? 0) - (a.created_at ?? 0);
 	});
 
+	const nowMs = Date.now();
 	const html = sorted.map((row) => {
 		const give = (row.give ?? []).map(fmtAsset).join(" + ");
 		const want = (row.want ?? []).map(fmtAsset).join(" + ") || "<span class='muted'>(gift)</span>";
@@ -98,11 +127,17 @@ async function refresh() {
 		const cancelBtn = (row.status === "open" && row.seller_pubkey === status.writer_pubkey)
 			? `<button class="auction-cancel" data-id="${escapeHtml(row.id)}">cancel</button>`
 			: "";
+		const expiry = expiryLabel(row, nowMs);
+		// Stale = open in the view but past its deadline (no op has touched it
+		// yet to trigger lazy-expire). Show as a soft warning.
+		const isStale = row.status === "open" && typeof row.expiry_ms === "number" && row.expiry_ms <= nowMs;
+		const expiryCls = isStale ? "auction-expiry stale" : "auction-expiry";
 		return `
 			<li class="auction-row" data-id="${escapeHtml(row.id)}">
 				<div class="auction-line">
 					<span class="auction-id">${escapeHtml(row.id.slice(0, 12))}</span>
 					${statusBadge(row.status)}
+					${expiry ? `<span class="${expiryCls}">${escapeHtml(expiry)}</span>` : ""}
 				</div>
 				<div class="auction-terms">
 					<span class="give">${give}</span>

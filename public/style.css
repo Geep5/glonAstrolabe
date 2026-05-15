@@ -2031,3 +2031,13 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	color: #ff6b6b;
 	border-color: #ff6b6b;
 }
+.auction-expiry {
+	font-size: 10px;
+	color: var(--text-muted);
+	font-family: monospace;
+	margin-left: 6px;
+}
+.auction-expiry.stale {
+	color: #ffc857;
+	font-weight: 600;
+}
