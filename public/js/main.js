@@ -22,8 +22,8 @@ import { colorForType } from "./colors.js";
 
 import { showPaymentModal } from "./payment-modal.js";
 	import { openAgentChat, initAgentChats } from "./chat.js";
-	import { initMiningToggle } from "./mining-toggle.js";
 	import { initNetworkPanel } from "./network-panel.js";
+	import { initAuctionsPanel } from "./auctions-panel.js";
 	import { initPeerChatPanel, openPeerChat } from "./peer-chat-panel.js";
 	import { initPeerDetailPanel, openPeerDetail } from "./peer-detail-panel.js";
 	import { initSpellBar } from "./spell-bar.js";
@@ -109,8 +109,8 @@ const materials = {
 		agents.sort((a, b) => (b.agentStats?.lastActivity ?? 0) - (a.agentStats?.lastActivity ?? 0));
 		contextAgentId = agents[0]?.id ?? null;
 		initAgentChats(agents);
-		initMiningToggle();
 		initNetworkPanel();
+		initAuctionsPanel();
 		initPeerChatPanel();
 		initPeerDetailPanel();
 		initSpellBar();

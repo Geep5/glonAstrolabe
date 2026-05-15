@@ -30,10 +30,6 @@
 			<span id="root-path" class="root">loading…</span>
 		</div>
 		<div class="top-right">
-			<button id="mining-toggle" class="mining-toggle" type="button" title="Toggle FIG anchor mining (60s tick)" hidden>
-				<span class="mining-icon">⛏</span>
-				<span class="mining-label">mining…</span>
-			</button>
 			<input id="search" type="search" placeholder="search id / type / name…" />
 		</div>
 	</header>
@@ -93,6 +89,13 @@
 		<div class="network-footer muted small" id="network-status"></div>
 	</aside>
 
+	<aside id="auctions" hidden>
+		<button class="panel-collapse" data-panel="auctions" title="Collapse">─</button>
+		<h3>Auction House <span id="auctions-count" class="count"></span></h3>
+		<div class="auctions-footer muted small" id="auctions-status"></div>
+		<ul id="auctions-list" class="auctions-list"></ul>
+	</aside>
+
 	<!-- Spell bar: WoW-style action bar at the bottom of the screen.
 	     Two rows of slots; each slot toggles a UI panel/window via
 	     the `hidden` attribute on its target (full hide, no peeking).
@@ -114,6 +117,9 @@
 			</button>
 			<button class="spell-slot" data-target="network"     data-key="5" type="button" title="Network">
 				<span class="spell-glyph">N</span><span class="spell-key">5</span>
+			</button>
+			<button class="spell-slot" data-target="auctions"    data-key="-" type="button" title="Auction house">
+				<span class="spell-glyph">A</span><span class="spell-key">A</span>
 			</button>
 		</div>
 		<div class="spell-row">

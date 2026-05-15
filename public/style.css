@@ -1944,3 +1944,90 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	#insp-style-section .collapsible.expanded::after {
 		content: "▲";
 	}
+
+/* ── Auctions panel ─────────────────────────────────────────── */
+#auctions {
+	position: fixed;
+	right: 12px;
+	bottom: 90px;
+	width: 320px;
+	max-height: 40vh;
+	overflow-y: auto;
+	background: var(--bg-panel);
+	border: 1px solid var(--stroke);
+	border-radius: var(--radius);
+	padding: 10px 14px;
+	box-shadow: var(--shadow);
+	z-index: 10;
+	color: var(--text);
+	font-size: 13px;
+	backdrop-filter: blur(8px);
+}
+#auctions h3 {
+	margin: 0 0 8px 0;
+	font-size: 13px;
+	font-weight: 600;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+.auctions-list { list-style: none; margin: 0; padding: 0; }
+.auction-row {
+	padding: 6px 0;
+	border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.auction-row:last-child { border-bottom: none; }
+.auction-line {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 2px;
+}
+.auction-id {
+	font-family: monospace;
+	color: var(--text-muted);
+	font-size: 11px;
+}
+.auction-status {
+	font-size: 10px;
+	padding: 1px 6px;
+	border-radius: 3px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.auction-status.ok    { background: rgba(94, 234, 212, 0.15); color: #5eead4; }
+.auction-status.info  { background: rgba(167, 139, 250, 0.15); color: #a78bfa; }
+.auction-status.warn  { background: rgba(255, 200, 87, 0.15); color: #ffc857; }
+.auction-status.muted { background: rgba(107, 114, 128, 0.15); color: #9ca3af; }
+.auction-terms {
+	font-size: 12px;
+	margin: 2px 0;
+}
+.auction-terms .for { color: var(--text-muted); margin: 0 4px; }
+.asset-fungible b { color: #5eead4; }
+.asset-obj { font-style: italic; }
+.auction-meta {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-top: 2px;
+}
+.auctions-footer {
+	font-size: 10px;
+	color: var(--text-muted);
+	margin-bottom: 6px;
+	font-family: monospace;
+}
+.auction-cancel {
+	background: transparent;
+	border: 1px solid var(--stroke);
+	color: var(--text-muted);
+	font-size: 10px;
+	padding: 2px 8px;
+	border-radius: 3px;
+	cursor: pointer;
+}
+.auction-cancel:hover {
+	color: #ff6b6b;
+	border-color: #ff6b6b;
+}

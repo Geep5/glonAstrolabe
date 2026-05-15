@@ -90,29 +90,100 @@ app.get("/api/agents/:id/context", (req, res) => {
 		});
 		res.json({ ok: true, agentId: id, status: "accepted" });
 	});
-// ── Anchor mining toggle ─────────────────────────────────────────
+// ── Auction house panel ─────────────────────────────────────────
 //
-// FIG mining is a 60s background tick declared by /anchor. It runs
-// automatically once the program is loaded — there's no other opt-in
-// gate — and shows up as the noisy chain.anchor events in the live log.
-// These endpoints expose the runtime-toggleable on/off field stored on
-// the /anchor program object so the dashboard can pause/resume it
-// without restarting the daemon.
+// /auction is the autobase-backed P2P auction house. These endpoints
+// proxy to the daemon's program actor. Replaces the deleted /anchor
+// (PoST) endpoints. UI uses these to render the live auction list, show
+// per-node ledger health, and surface bids/settlements.
 
-app.get("/api/anchor/status", async (_req, res) => {
+app.get("/api/auction/status", async (_req, res) => {
 	try {
-		const status = await dispatchToDaemon("/anchor", "getStatus", []);
+		const status = await dispatchToDaemon("/auction", "status", []);
 		res.json({ ok: true, status });
 	} catch (err: any) {
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
 });
 
-app.post("/api/anchor/enabled", async (req, res) => {
-	const enabled = !!req.body?.enabled;
+app.get("/api/auctions", async (_req, res) => {
 	try {
-		const result = await dispatchToDaemon("/anchor", "setEnabled", [{ enabled }]);
+		const list = await dispatchToDaemon("/auction", "list", []);
+		res.json({ ok: true, auctions: list ?? [] });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.get("/api/auctions/:id", async (req, res) => {
+	try {
+		const result = await dispatchToDaemon("/auction", "get", [req.params.id]);
+		res.json({ ok: true, auction: result ?? null });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/auctions/post", async (req, res) => {
+	try {
+		const result = await dispatchToDaemon("/auction", "post", [req.body ?? {}]);
 		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/auctions/gift", async (req, res) => {
+	try {
+		const result = await dispatchToDaemon("/auction", "gift", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/auctions/bid", async (req, res) => {
+	try {
+		const result = await dispatchToDaemon("/auction", "bid", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/auctions/settle", async (req, res) => {
+	try {
+		const result = await dispatchToDaemon("/auction", "settle", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/auctions/cancel", async (req, res) => {
+	try {
+		const result = await dispatchToDaemon("/auction", "cancel", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+// ── Coins on the autobase ─────────────────────────────────────────
+
+app.get("/api/coins", async (_req, res) => {
+	try {
+		const tokens = await dispatchToDaemon("/coin", "list", []);
+		res.json({ ok: true, tokens: tokens ?? [] });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.get("/api/coins/:id/holders", async (req, res) => {
+	try {
+		const holders = await dispatchToDaemon("/coin", "holders", [{ tokenId: req.params.id }]);
+		res.json({ ok: true, holders: holders ?? [] });
 	} catch (err: any) {
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
