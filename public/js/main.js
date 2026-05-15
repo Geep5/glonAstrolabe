@@ -20,7 +20,6 @@ import { colorForType } from "./colors.js";
 	import { bindInspector, setLanding, showObject, clear as clearInspector, setContextState, showDaemonTask } from "./inspector.js";
 	import { setupLiveLog } from "./livelog.js";
 
-import { showPaymentModal } from "./payment-modal.js";
 	import { openAgentChat, initAgentChats } from "./chat.js";
 	import { initNetworkPanel } from "./network-panel.js";
 	import { initAuctionsPanel } from "./auctions-panel.js";
@@ -754,71 +753,70 @@ function renderJobs(objects) {
 	}
 }
 
-	// Coins panel: coin buckets + recent chain ops
-	async function renderCoins(objects) {
+	// Coins panel: tokens deployed on the autobase + per-token holders.
+	// Replaces the old chain.coin.bucket renderer; reads from /api/coins
+	// (tokens) and /api/coins/:id/holders.
+	async function renderCoins(_objects) {
 		const host = document.getElementById("crypto-list");
 		const countEl = document.getElementById("crypto-count");
 		if (!host) return;
 
-	try {
-		const [{ buckets }, recent] = await Promise.all([
-			fetch("/api/coins").then((r) => r.json()),
-			fetch("/api/events/recent").then((r) => r.json()),
-		]);
-		countEl.textContent = String(buckets.length);
-		host.innerHTML = "";
-
-		const payBtn = document.createElement("button");
-		payBtn.textContent = "Make Payment";
-		payBtn.className = "primary";
-		payBtn.style.marginBottom = "8px";
-		payBtn.style.width = "100%";
-		payBtn.addEventListener("click", () => showPaymentModal({ amount: "10" }));
-		host.appendChild(payBtn);
-
-		for (const b of buckets) {
-				const cs = b.coinState;
-				const tokenLabel = cs.tokenName
-					? (cs.tokenSymbol ? `${cs.tokenName} (${cs.tokenSymbol})` : cs.tokenName)
-					: (cs.tokenSymbol || "Coin Bucket");
-				const li = document.createElement("li");
-				li.className = "coins-row";
-				li.innerHTML = `
-					<span class="coins-dot" style="background:#c0c0c0"></span>
-					<span class="coins-name">${tokenLabel}</span>
-					<span class="coins-meta">${shortId(b.id)} · ${cs.unspentCount} coins · supply ${cs.totalAmount}</span>
-				`;
-				li.addEventListener("click", () => select(b.id, { focus: true }));
-				host.appendChild(li);
+		try {
+			const r = await fetch("/api/coins").then((res) => res.json());
+			if (!r?.ok) {
+				host.innerHTML = `<li class="coins-row empty">${r?.error ?? "autobase offline"}</li>`;
+				countEl.textContent = "";
+				return;
 			}
+			const tokens = r.tokens ?? [];
+			countEl.textContent = String(tokens.length);
+			host.innerHTML = "";
 
-			const chainEvents = (recent.events ?? [])
-				.filter((ev) => ev.typeKey === "chain.coin.bucket" || (ev.ops ?? []).some((op) => op.preview?.includes("chain.coin.op")))
-				.slice(-10)
-				.reverse();
-
-			if (chainEvents.length > 0) {
-				const section = document.createElement("div");
-				section.className = "coins-section";
-				section.innerHTML = "<h4>Recent ops</h4>";
-				for (const ev of chainEvents) {
-					const op = ev.ops?.find((o) => o.preview);
-					const d = document.createElement("div");
-					d.className = "coins-op";
-					const preview = op?.preview ?? "chain op";
-					d.innerHTML = `<span class="coins-op-kind">${shortId(ev.objectId)}</span><span class="coins-op-amount">${preview}</span>`;
-					section.appendChild(d);
-				}
-				host.appendChild(section);
-			}
-
-			if (buckets.length === 0) {
+			if (tokens.length === 0) {
 				const li = document.createElement("li");
 				li.className = "coins-row empty";
-				li.textContent = "no coins";
+				li.textContent = "no tokens deployed yet";
 				host.appendChild(li);
+				return;
 			}
-		} catch {
+
+			// Render each token, then lazy-load its holders to show top-holder
+			// summary inline.
+			for (const t of tokens) {
+				const li = document.createElement("li");
+				li.className = "coins-row";
+				const renounced = t.mint_renounced ? "" : ` · mint-open`;
+				li.innerHTML = `
+					<span class="coins-dot" style="background:#5eead4"></span>
+					<span class="coins-name">${escapeHtml(t.name ?? t.symbol ?? "?")}${t.symbol ? ` <span class="muted small">(${escapeHtml(t.symbol)})</span>` : ""}</span>
+					<span class="coins-meta">${shortId(t.token_id)} · supply ${escapeHtml(String(t.supply))}${renounced}</span>
+					<div class="coins-holders muted small" data-token="${escapeHtml(t.token_id)}"></div>
+				`;
+				li.style.cursor = "pointer";
+				li.title = "Click to fly to the auction house";
+				li.addEventListener("click", () => focusOnAuctionHouse());
+				host.appendChild(li);
+				// Lazy load holders (don't block paint).
+				fetch(`/api/coins/${encodeURIComponent(t.token_id)}/holders`)
+					.then((res) => res.json())
+					.then((hr) => {
+						const holdersEl = li.querySelector(".coins-holders");
+						if (!holdersEl) return;
+						if (!hr?.ok) { holdersEl.textContent = "(no balances yet)"; return; }
+						const holders = hr.holders ?? [];
+						if (holders.length === 0) { holdersEl.textContent = "(no balances)"; return; }
+						const lines = holders.slice(0, 4).map((h) => {
+							const tag = h.pubkey === t.owner_pubkey ? " (owner)" : "";
+							return `${escapeHtml(shortId(h.pubkey))} · ${escapeHtml(h.balance)}${tag}`;
+						});
+						holdersEl.innerHTML = lines.join("<br>");
+					})
+					.catch(() => {
+						const holdersEl = li.querySelector(".coins-holders");
+						if (holdersEl) holdersEl.textContent = "(holders unreachable)";
+					});
+			}
+		} catch (err) {
 			// keep last paint on transient error
 		}
 	}
@@ -957,6 +955,7 @@ function refreshPickables() {
 	cosmosCtx.group.traverse((obj) => {
 		if (obj.userData?.kind === "object") pickables.push(obj);
 		else if (obj.userData?.kind === "conversation") pickables.push(obj);
+		else if (obj.userData?.kind === "auction-house") pickables.push(obj);
 	});
 
 }
@@ -1204,6 +1203,10 @@ let cursorActive = false;
 			hoverId = ud.id;
 			document.getElementById("hover").textContent = `${ud.typeKey} · ${shortId(ud.id)}`;
 			showObjectTooltip(ud.obj);
+		} else if (ud.kind === "auction-house") {
+			hoverId = null;
+			document.getElementById("hover").textContent = "auction house · click to open panel";
+			hideTooltip();
 		}
 	}
 
@@ -1226,6 +1229,18 @@ function onClick(e) {
 	const first = hits[0]?.object;
 	if (!first) return;
 	const ud = first.userData;
+	if (ud.kind === "auction-house") {
+		// Open / focus the auctions panel.
+		const panel = document.getElementById("auctions");
+		if (panel) {
+			panel.hidden = false;
+			panel.classList.add("flash");
+			setTimeout(() => panel.classList.remove("flash"), 600);
+			// Trigger a fresh refresh by rebuilding the panel — easier than
+			// exporting a refresh hook. The next poll tick (≤5s) will redraw.
+		}
+		return;
+	}
 	if (ud.kind === "object") {
 		// If this object is a network peer (a remote glon's sun or
 		// moon), open the peer-detail panel: shows the host + their
@@ -1286,6 +1301,39 @@ function onDoubleClick(e) {
 		highlightSelected();
 		if (focus) focusOnId(id);
 	}
+
+	/** Focus the camera on the auction-house 3D marker and open its panel.
+	 *  Used by the coins panel — clicking a token flies you to where it lives. */
+	function focusOnAuctionHouse() {
+		let ahMesh = null;
+		cosmosCtx?.group?.traverse?.((obj) => {
+			if (obj.userData?.kind === "auction-house") ahMesh = obj;
+		});
+		if (ahMesh) {
+			const target = ahMesh.position.clone();
+			const horizontalDir = new THREE.Vector3(target.x, 0, target.z);
+			const horizontalDist = horizontalDir.length();
+			const dist = 8;
+			if (horizontalDist < 0.001) {
+				const back = new THREE.Vector3();
+				camera.getWorldDirection(back);
+				tweenCamera(target.clone().sub(back.multiplyScalar(dist)), target);
+			} else {
+				horizontalDir.divideScalar(horizontalDist);
+				const camPos = horizontalDir.multiplyScalar(Math.max(1.5, horizontalDist - dist));
+				camPos.y = camera.position.y;
+				tweenCamera(camPos, target);
+			}
+		}
+		const panel = document.getElementById("auctions");
+		if (panel) {
+			panel.hidden = false;
+			panel.classList.add("flash");
+			setTimeout(() => panel.classList.remove("flash"), 600);
+		}
+	}
+	// Expose to other modules.
+	window.glonFocusAuctionHouse = focusOnAuctionHouse;
 
 	function focusOnId(id) {
 		const node = cosmosCtx.nodes.get(id);

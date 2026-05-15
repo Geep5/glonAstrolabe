@@ -9,7 +9,6 @@
 	import * as planetForge from "./planet-forge.js";
 
 
-import { initPlanetForgePayButton } from "./payment-modal.js";
 	const els = {
 		empty: document.getElementById("inspector-empty"),
 		content: document.getElementById("inspector-content"),
@@ -27,9 +26,6 @@ import { initPlanetForgePayButton } from "./payment-modal.js";
 		contentBody: document.getElementById("insp-content"),
 		changes: document.getElementById("insp-changes"),
 		changeCount: document.getElementById("insp-change-count"),
-		coinSection: document.getElementById("insp-coin-section"),
-		coinHeader: document.getElementById("insp-coin-header"),
-		coinList: document.getElementById("insp-coin-list"),
 		styleSection: document.getElementById("insp-style-section"),
 		forgeHistory: document.getElementById("insp-forge-history"),
 		forgeStatus: document.getElementById("insp-forge-status"),
@@ -54,8 +50,6 @@ import { initPlanetForgePayButton } from "./payment-modal.js";
 		keySaveBtn: els.forgeKeySave,
 	});
 	let handlers = {};
-
-	initPlanetForgePayButton(els.forgeSend);
 
 export function bindInspector({ onNavigate, onInject }) {
 	handlers = { onNavigate, onInject };
@@ -171,7 +165,6 @@ export function showDaemonTask(task) {
 	els.agentSection.hidden = true;
 	els.scalarsSection.hidden = true;
 	els.linksSection.hidden = true;
-	els.coinSection.hidden = true;
 	els.styleSection.hidden = true;
 	els.contentSection.hidden = true;
 	els.changes.innerHTML = "";
@@ -268,15 +261,9 @@ function render(detail, changesResponse) {
 	}
 
 
-	// Coin bucket section ----------------------------------------
-	if (detail.coinState) {
-		els.coinSection.hidden = false;
-		els.scalarsSection.hidden = true;
-		els.linksSection.hidden = true;
-		renderCoinSection(detail.coinState);
-	} else {
-		els.coinSection.hidden = true;
-	}
+	// Coin buckets are gone — fungible balances now live in the autobase
+	// hyperbee view at `balance/<token>/<pubkey>`, not as chain.coin.bucket
+	// objects. The inspector defers coin display to the Coins panel.
 
 	// Style section (all objects) --------------------------------
 	renderStyleSection(obj.id);
@@ -317,33 +304,6 @@ function render(detail, changesResponse) {
 		els.changes.appendChild(row);
 	}
 }
-
-
-	function renderCoinSection(cs) {
-		els.coinHeader.innerHTML = "";
-		const tokenLabel = cs.tokenName
-			? (cs.tokenSymbol ? `${cs.tokenName} (${cs.tokenSymbol})` : cs.tokenName)
-			: (cs.tokenSymbol || shortId(cs.tokenId));
-		append(els.coinHeader, row("token", tokenLabel));
-		append(els.coinHeader, row("coins", `${cs.unspentCount} unspent / ${cs.coinCount} total`));
-		append(els.coinHeader, row("supply", cs.totalAmount));
-
-		els.coinList.innerHTML = "";
-		const entries = Object.entries(cs.coins);
-		if (entries.length === 0) {
-			els.coinList.textContent = "No coins yet.";
-		} else {
-			for (const [coinId, coin] of entries) {
-				const d = document.createElement("div");
-				d.className = "token-balance-row";
-				const status = coin.spent ? "spent" : "unspent";
-				d.innerHTML = `<span class="token-balance-pubkey">${shortId(coinId)}</span><span class="token-balance-value">${coin.amount} ${status}</span>`;
-				els.coinList.appendChild(d);
-			}
-		}
-	}
-
-
 
 
 	// ── Style section ────────────────────────────────────────────

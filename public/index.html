@@ -93,6 +93,35 @@
 		<button class="panel-collapse" data-panel="auctions" title="Collapse">─</button>
 		<h3>Auction House <span id="auctions-count" class="count"></span></h3>
 		<div class="auctions-footer muted small" id="auctions-status"></div>
+		<button id="auctions-new-btn" class="auctions-new-btn" type="button">+ post auction</button>
+		<form id="auctions-new-form" class="auctions-new-form" hidden>
+			<label class="auctions-field">
+				<span>give</span>
+				<input name="give" placeholder="100 <token_id>  or  sword-001" required />
+			</label>
+			<label class="auctions-field">
+				<span>asking price (optional)</span>
+				<input name="want" placeholder="50 <token_id>  — leave blank for open offers" />
+			</label>
+			<label class="auctions-field">
+				<span>directed to (optional)</span>
+				<input name="recipient" placeholder="64-hex chain pubkey — leave blank for public" />
+			</label>
+			<div class="auctions-mode-hint muted small" id="auctions-mode-hint">mode: open auction (any bid welcome)</div>
+			<label class="auctions-field">
+				<span>expires</span>
+				<input name="expires" value="24h" placeholder="30m / 1h / 2d" required />
+			</label>
+			<label class="auctions-field">
+				<span>signing key</span>
+				<input name="keyName" value="default" required />
+			</label>
+			<div class="auctions-form-actions">
+				<button type="submit" class="auctions-submit">post</button>
+				<button type="button" id="auctions-cancel-btn" class="auctions-cancel-btn">cancel</button>
+			</div>
+			<div class="auctions-form-error muted small" id="auctions-form-error"></div>
+		</form>
 		<ul id="auctions-list" class="auctions-list"></ul>
 	</aside>
 
@@ -200,13 +229,6 @@
 			<div class="insp-section" id="insp-links-section" hidden>
 				<h3>Links</h3>
 				<div id="insp-links" class="link-list"></div>
-			</div>
-
-			<div class="insp-section" id="insp-coin-section" hidden>
-				<h3>Coin Bucket</h3>
-				<div id="insp-coin-header" class="kv"></div>
-				<h4>Coins</h4>
-				<div id="insp-coin-list" class="token-table"></div>
 			</div>
 
 			<div id="insp-recall" class="insp-recall"></div>
