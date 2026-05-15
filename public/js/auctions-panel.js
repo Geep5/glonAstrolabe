@@ -243,10 +243,10 @@ function updateModeHint(form) {
 	const want = (form.elements.namedItem("want")?.value ?? "").trim();
 	const recipient = (form.elements.namedItem("recipient")?.value ?? "").trim();
 	let label, cls;
-	if (!want && !recipient)     { label = "mode: open auction (any bid welcome)";   cls = "mode-open"; }
-	else if (!want && recipient) { label = "mode: gift (no payment from recipient)"; cls = "mode-gift"; }
-	else if (want && !recipient) { label = "mode: fixed-price (public)";              cls = "mode-fixed"; }
-	else                          { label = "mode: directed sale (private)";          cls = "mode-directed"; }
+	if (!want && !recipient)     { label = "mode: open auction (any bid welcome)";        cls = "mode-open"; }
+	else if (!want && recipient) { label = "mode: gift — transfers instantly on post";    cls = "mode-gift"; }
+	else if (want && !recipient) { label = "mode: fixed-price (public)";                  cls = "mode-fixed"; }
+	else                          { label = "mode: directed sale (private)";              cls = "mode-directed"; }
 	hint.textContent = label;
 	hint.className = `auctions-mode-hint muted small ${cls}`;
 }
