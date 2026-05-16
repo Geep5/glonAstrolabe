@@ -2309,13 +2309,13 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 /* Bid form (expanded view) */
 .exp-bid-form { }
 .bid-form-row {
-	display: flex;
+	display: grid;
+	grid-template-columns: 1fr 110px auto;
 	gap: 8px;
 	align-items: stretch;
 }
-.bid-form-input-wrap { flex: 1; position: relative; }
-.bid-form-input {
-	width: 100%;
+.bid-form-token,
+.bid-form-amount {
 	background: rgba(0, 0, 0, 0.35);
 	border: 1px solid var(--stroke-strong);
 	border-radius: 8px;
@@ -2323,8 +2323,23 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	color: var(--text);
 	font-size: 13px;
 	outline: none;
+	font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
-.bid-form-input:focus { border-color: var(--accent); }
+.bid-form-token {
+	appearance: none;
+	cursor: pointer;
+	padding-right: 30px;
+	background-image:
+		linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+		linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+	background-position: calc(100% - 14px) center, calc(100% - 10px) center;
+	background-size: 4px 4px, 4px 4px;
+	background-repeat: no-repeat;
+}
+.bid-form-token:focus,
+.bid-form-amount:focus { border-color: var(--accent); }
+.bid-form-token:disabled,
+.bid-form-amount:disabled { opacity: 0.65; cursor: default; }
 .bid-form-submit {
 	background: var(--accent);
 	border: 0;

@@ -325,21 +325,32 @@ function renderExpanded(a, status) {
 				</div>
 			`;
 		} else {
-			const state = bidForm.get(a.id) ?? { status: "idle", amount: "" };
+			const state = bidForm.get(a.id) ?? { status: "idle", token: "", amount: "" };
 			const isBusy = state.status === "signing" || state.status === "confirming";
 			const isConfirmed = state.status === "confirmed";
+			const ownedTokens = ALL_TOKENS.filter((t) => MY_BALANCES.has(t.token_id));
+			const tokenOpts = ownedTokens.length === 0
+				? `<option value="" disabled selected>no coins owned</option>`
+				: ownedTokens.map((t) => {
+					const sym = t.symbol ?? t.name ?? t.token_id.slice(0, 8);
+					const bal = MY_BALANCES.get(t.token_id)?.toString() ?? "0";
+					const selected = state.token === t.token_id ? " selected" : "";
+					return `<option value="${escapeHtml(t.token_id)}"${selected}>${escapeHtml(sym)}  ·  bal ${escapeHtml(bal)}</option>`;
+				}).join("");
 			formHtml = `
 				<div class="exp-bid-form">
 					<div class="exp-label">place bid</div>
 					<div class="bid-form-row">
-						<div class="bid-form-input-wrap">
-							<input class="bid-form-input mono"
-								name="bid-amount-${escapeHtml(a.id)}"
-								value="${escapeHtml(state.amount)}"
-								placeholder="amount + token_id"
-								data-id="${escapeHtml(a.id)}"
-								${isBusy || isConfirmed ? "disabled" : ""} />
-						</div>
+						<select class="bid-form-token mono"
+							data-id="${escapeHtml(a.id)}"
+							${isBusy || isConfirmed ? "disabled" : ""}>${tokenOpts}</select>
+						<input class="bid-form-amount mono"
+							data-id="${escapeHtml(a.id)}"
+							type="text"
+							inputmode="numeric"
+							value="${escapeHtml(state.amount)}"
+							placeholder="amount"
+							${isBusy || isConfirmed ? "disabled" : ""} />
 						<button class="bid-form-submit ${isConfirmed ? "confirmed" : ""}"
 							data-action="bid"
 							data-id="${escapeHtml(a.id)}"
@@ -353,7 +364,7 @@ function renderExpanded(a, status) {
 					</div>
 					<div class="bid-form-hint mono small">
 						${state.status === "error" ? `<span style="color: var(--err)">${escapeHtml(state.error ?? "failed")}</span>`
-						: state.status === "idle" ? `format: <span class="mono">100 &lt;token_id&gt;</span> or <span class="mono">item-id</span>`
+						: state.status === "idle" ? (ownedTokens.length === 0 ? "you don't own any coins yet" : `pick a token + enter an amount`)
 						: state.status === "signing" ? "signing with key default…"
 						: state.status === "confirming" ? "awaiting consensus…"
 						: state.status === "confirmed" ? "bid live on the ledger" : ""}
@@ -532,39 +543,54 @@ function wireRows() {
 		btn.addEventListener("click", async (e) => {
 			e.stopPropagation();
 			const id = e.currentTarget.getAttribute("data-id");
-			const input = LIST.querySelector(`input[name="bid-amount-${cssEscape(id)}"]`);
-			const spec = input?.value ?? "";
-			const offer = parseAssetField(spec);
-			if (!offer) {
-				bidForm.set(id, { status: "error", error: "format: 100 <token_id>", amount: spec });
+			const tokenSel = LIST.querySelector(`select.bid-form-token[data-id="${cssEscape(id)}"]`);
+			const amtInput = LIST.querySelector(`input.bid-form-amount[data-id="${cssEscape(id)}"]`);
+			const token  = tokenSel?.value ?? "";
+			const amount = (amtInput?.value ?? "").trim();
+			if (!token) {
+				bidForm.set(id, { status: "error", error: "pick a token from the dropdown", token, amount });
 				lastRender = ""; refresh();
 				return;
 			}
-			bidForm.set(id, { status: "signing", amount: spec });
+			if (!amount || !/^\d+$/.test(amount)) {
+				bidForm.set(id, { status: "error", error: "amount must be a positive integer", token, amount });
+				lastRender = ""; refresh();
+				return;
+			}
+			const offer = { token, amount };
+			bidForm.set(id, { status: "signing", token, amount });
 			lastRender = ""; refresh();
 			try {
-				bidForm.set(id, { status: "confirming", amount: spec });
+				bidForm.set(id, { status: "confirming", token, amount });
 				lastRender = ""; refresh();
 				await postJSON("/api/auctions/bid", { auctionId: id, offer: [offer], keyName: "default" });
-				bidForm.set(id, { status: "confirmed", amount: spec });
+				bidForm.set(id, { status: "confirmed", token, amount });
 				toast(`Bid posted on ${id.slice(0, 8)}`);
+				// Refresh balances since the bid amount may matter at settle.
+				loadTokensAndBalances();
 				lastRender = ""; refresh();
-				// Clear bid-form state after a moment.
 				setTimeout(() => {
 					bidForm.delete(id);
 					lastRender = ""; refresh();
 				}, 2500);
 			} catch (err) {
-				bidForm.set(id, { status: "error", error: err.message ?? String(err), amount: spec });
+				bidForm.set(id, { status: "error", error: err.message ?? String(err), token, amount });
 				lastRender = ""; refresh();
 			}
 		});
 	}
-	// Bid form input — persist value across re-renders
-	for (const input of LIST.querySelectorAll(".bid-form-input")) {
+	// Persist bid form state across re-renders.
+	for (const sel of LIST.querySelectorAll(".bid-form-token")) {
+		sel.addEventListener("change", (e) => {
+			const id = e.currentTarget.getAttribute("data-id");
+			const cur = bidForm.get(id) ?? { status: "idle", amount: "" };
+			bidForm.set(id, { ...cur, token: e.currentTarget.value });
+		});
+	}
+	for (const input of LIST.querySelectorAll(".bid-form-amount")) {
 		input.addEventListener("input", (e) => {
 			const id = e.currentTarget.getAttribute("data-id");
-			const cur = bidForm.get(id) ?? { status: "idle" };
+			const cur = bidForm.get(id) ?? { status: "idle", token: "" };
 			bidForm.set(id, { ...cur, amount: e.currentTarget.value });
 		});
 	}
@@ -799,11 +825,15 @@ export function initAuctionsPanel() {
 	TABS   = document.getElementById("auctions-tabs");
 	SORTS  = document.getElementById("auctions-sorts");
 	if (!PANEL || !LIST) return;
-	loadWalletKeys().then(() => {
+	loadWalletKeys().then(async () => {
+		await loadTokensAndBalances();
 		wireForm();
 		wireChrome();
 		refresh();
 		setInterval(refresh, POLL_MS);
 		setInterval(loadWalletKeys, 30_000);
+		// Refresh token list + my balances every 15s — picks up new deploys
+		// and balance changes (gifts, settlements) without a page reload.
+		setInterval(loadTokensAndBalances, 15_000);
 	});
 }
