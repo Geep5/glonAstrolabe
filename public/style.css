@@ -1316,6 +1316,18 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	cursor: pointer;
 }
 .coins-row:hover { background: rgba(255,255,255,0.04); }
+.coins-row.empty {
+	display: block;
+	padding: 8px 6px;
+	color: var(--text-muted);
+	font-size: 11px;
+	cursor: default;
+}
+.coins-holders {
+	grid-column: 1 / -1;
+	padding-left: 16px;
+	margin-top: 2px;
+}
 .coins-dot {
 	width: 7px;
 	height: 7px;

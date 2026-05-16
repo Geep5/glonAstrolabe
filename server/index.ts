@@ -183,7 +183,9 @@ app.post("/api/auctions/cancel", async (req, res) => {
 app.get("/api/coins", async (_req, res) => {
 	try {
 		const tokens = await dispatchToDaemon("/coin", "list", []);
-		res.json({ ok: true, tokens: tokens ?? [] });
+		// Filter malformed deploys (e.g. positional args passed instead of object shape).
+		const clean = (tokens ?? []).filter((t) => typeof t?.name === "string" && t.name.length > 0);
+		res.json({ ok: true, tokens: clean });
 	} catch (err: any) {
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}

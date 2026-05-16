@@ -781,8 +781,9 @@ function renderJobs(objects) {
 			}
 
 			// Render each token, then lazy-load its holders to show top-holder
-			// summary inline.
+			// summary inline. Skip malformed tokens (defense in depth).
 			for (const t of tokens) {
+				if (!t?.name) continue;
 				const li = document.createElement("li");
 				li.className = "coins-row";
 				const renounced = t.mint_renounced ? "" : ` · mint-open`;
