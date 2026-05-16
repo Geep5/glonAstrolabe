@@ -118,6 +118,36 @@ GET  /api/events/recent                        last ≤200 events as JSON
 POST /api/agents/:id/recall/:blockId           re-inject a compacted block via glon daemon
 POST /api/agents/:agentId/inject/:objectId     post a user_text reference into agent context
 ```
+## Gotchas for agents
+
+1. **Daemon needs `GLON_AUCTION=1`.**  
+   The coin and auction autobase only starts when the daemon is launched with that env var. Without it, `/api/coins` and `/api/auctions` return `autobase not initialised`.
+
+2. **Wallet keys live in the daemon, not the actor host.**  
+   There is no `walletActor` in the RivetKit registry. Create/list/sign keys via the daemon dispatch endpoint (`prefix: "/wallet"`). Example:
+   ```bash
+   curl -s http://127.0.0.1:6430/dispatch \\
+     -d '{"prefix":"/wallet","action":"new","args":["default"]}'
+   ```
+
+3. **`/coin deploy` expects an object, not positional strings.**  
+   Wrong: `args: ["Grail","GRAIL","500"]` — this deploys a token with `undefined` name/symbol.  
+   Right: `args: [{"name":"Grail","symbol":"GRAIL","supply":"500"}]`.
+
+4. **Hard-refresh after CSS changes.**  
+   The HTML links `style.css` without a cache buster. After editing `public/style.css`, bump the query param in `index.html` (e.g. `style.css?v=2`) or tell the user to press `Ctrl+Shift+R`.
+
+5. **`nohup` + `disown` is required for background daemons.**  
+   `&` and `recipe` both kill child processes when the tool call ends. Use:
+   ```bash
+   nohup npx tsx src/index.ts > log 2>&1 & disown
+   ```
+
+6. **Protobuf `Value` fields use `stringValue`, not `string`.**  
+   When creating objects via `storeActor.create`, scalar fields must be `{stringValue: "..."}` (or `intValue`, `boolValue`). Using `{string: "..."}` creates an object with all fields `null`.
+
+7. **Bootstrap order matters.**  
+   Start the actor host (`src/index.ts`) before running `bootstrap.ts` or starting the daemon (`scripts/daemon.ts`). Both connect to the actor host on port `6420`.
 
 ## Layout
 
