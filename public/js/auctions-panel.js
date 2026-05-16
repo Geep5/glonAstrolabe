@@ -431,11 +431,10 @@ async function refresh() {
 		if (a?.ok) auctions = a.auctions ?? [];
 	} catch { unreachable = true; }
 
-	if (unreachable || !status?.bootstrap_key) {
-		PANEL.hidden = true;
-		return;
-	}
-	PANEL.hidden = false;
+	// Skip render on a failed poll — keep the last-rendered state on screen
+	// rather than blanking the panel. Visibility is owned by the spell bar
+	// (see spell-bar.js), so we deliberately don't touch PANEL.hidden here.
+	if (unreachable || !status) return;
 
 	// Collect token IDs that need labels.
 	const tokenIds = new Set();

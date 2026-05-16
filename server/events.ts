@@ -286,6 +286,7 @@ export function recentEvents(): LiveEvent[] {
 }
 
 export function streamEvents(res: Response): void {
+	console.log(`[streamEvents] new connection, ${ring.length} events in ring, ${bus.listenerCount("event")} listeners`);
 	res.set({
 		"Content-Type": "text/event-stream",
 		"Cache-Control": "no-cache, no-transform",
@@ -298,13 +299,15 @@ export function streamEvents(res: Response): void {
 	// client can render them muted and skip side-effects (heat bumps,
 	// context-set refresh) that only make sense for live activity.
 	const replay = ring.slice(-REPLAY_ON_CONNECT);
+	console.log(`[streamEvents] replaying ${replay.length} events`);
 	for (const ev of replay) {
 		res.write(`data: ${JSON.stringify({ ...ev, replay: true })}\n\n`);
 	}
 	const onEvent = (ev: LiveEvent) => {
 		// `res.write` returns false when the kernel buffer is full; SSE
 		// browsers reconnect automatically so we tolerate the rare drop.
-		res.write(`data: ${JSON.stringify(ev)}\n\n`);
+		const wrote = res.write(`data: ${JSON.stringify(ev)}\n\n`);
+		if (!wrote) console.log("[streamEvents] buffer full, event dropped");
 	};
 	bus.on("event", onEvent);
 	// Heartbeat keeps proxies and idle connections alive.
@@ -312,6 +315,7 @@ export function streamEvents(res: Response): void {
 		res.write(`: hb ${Date.now()}\n\n`);
 	}, 15_000);
 	res.on("close", () => {
+		console.log("[streamEvents] connection closed");
 		bus.off("event", onEvent);
 		clearInterval(hb);
 	});

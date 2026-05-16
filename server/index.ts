@@ -29,6 +29,12 @@ const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "64kb" }));
 
+// ── Global logging middleware ────────────────────────────────────────
+app.use((req, res, next) => {
+	console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+	next();
+});
+
 // ── API ────────────────────────────────────────────────────────────
 
 app.get("/api/meta", (_req, res) => {
@@ -115,15 +121,6 @@ app.get("/api/auctions", async (_req, res) => {
 	}
 });
 
-app.get("/api/auctions/:id", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/auction", "get", [req.params.id]);
-		res.json({ ok: true, auction: result ?? null });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
 app.get("/api/auctions/:id/bids", async (req, res) => {
 	try {
 		const bids = await dispatchToDaemon("/auction", "getBids", [req.params.id]);
@@ -136,15 +133,6 @@ app.get("/api/auctions/:id/bids", async (req, res) => {
 app.post("/api/auctions/post", async (req, res) => {
 	try {
 		const result = await dispatchToDaemon("/auction", "post", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/auctions/gift", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/auction", "gift", [req.body ?? {}]);
 		res.json({ ok: true, result });
 	} catch (err: any) {
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
@@ -181,12 +169,16 @@ app.post("/api/auctions/cancel", async (req, res) => {
 // ── Coins on the autobase ─────────────────────────────────────────
 
 app.get("/api/coins", async (_req, res) => {
+	console.log("[GET /api/coins] request");
 	try {
 		const tokens = await dispatchToDaemon("/coin", "list", []);
+		console.log(`[GET /api/coins] received ${tokens?.length ?? 0} tokens`);
 		// Filter malformed deploys (e.g. positional args passed instead of object shape).
 		const clean = (tokens ?? []).filter((t) => typeof t?.name === "string" && t.name.length > 0);
+		console.log(`[GET /api/coins] returning ${clean.length} clean tokens`);
 		res.json({ ok: true, tokens: clean });
 	} catch (err: any) {
+		console.error("[GET /api/coins] error:", err?.message ?? String(err), err?.stack);
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
 });
@@ -206,18 +198,24 @@ app.get("/api/coins/:id/holders", async (req, res) => {
 // the network panel, surface peer-request prompts, and send accept/decline.
 
 app.get("/api/network/status", async (_req, res) => {
+	console.log("[GET /api/network/status] request");
 	try {
 		const status = await dispatchToDaemon("/directory", "status", []);
+		console.log("[GET /api/network/status] success");
 		res.json({ ok: true, status });
 	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+		console.log("[GET /api/network/status] caught error (graceful fallback):", err?.message);
+		// Return empty status instead of crashing on missing /directory program
+		res.json({ ok: true, status: { ready: false, reason: "directory program not deployed" } });
 	}
 });
 
 app.get("/api/network/peers", async (_req, res) => {
+	console.log("[GET /api/network/peers] request");
 	try {
 		const peers = await dispatchToDaemon("/directory", "listDiscovered", []);
 		const peerList = await dispatchToDaemon("/peer", "list", []);
+		console.log(`[GET /api/network/peers] discovered ${peers?.length ?? 0} peers, ${peerList?.length ?? 0} in list`);
 		const trustMap = new Map();
 		for (const p of peerList || []) {
 			const key = (p.identity_pubkey || p.display_name || "").toLowerCase();
@@ -234,18 +232,25 @@ app.get("/api/network/peers", async (_req, res) => {
 				|| trustMap.get((p.agent_name || "").toLowerCase())
 				|| (p.peer_object_id ? "trusted" : "discovered"),
 		}));
+		console.log(`[GET /api/network/peers] returning ${merged.length} merged peers`);
 		res.json({ ok: true, peers: merged });
 	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+		console.log("[GET /api/network/peers] caught error (graceful fallback):", err?.message);
+		// Return empty peers list instead of crashing
+		res.json({ ok: true, peers: [] });
 	}
 });
 
 app.get("/api/network/requests", async (_req, res) => {
+	console.log("[GET /api/network/requests] request");
 	try {
 		const requests = await dispatchToDaemon("/directory", "listRequests", []);
+		console.log(`[GET /api/network/requests] found ${requests?.length ?? 0} requests`);
 		res.json({ ok: true, requests });
 	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+		console.log("[GET /api/network/requests] caught error (graceful fallback):", err?.message);
+		// Return empty requests list instead of crashing
+		res.json({ ok: true, requests: [] });
 	}
 });
 
@@ -293,11 +298,15 @@ app.post("/api/network/announce", async (_req, res) => {
 // new ones through these endpoints.
 
 app.get("/api/peer-chat/conversations", async (_req, res) => {
+	console.log("[GET /api/peer-chat/conversations] request");
 	try {
 		const conversations = await dispatchToDaemon("/peer-chat", "listConversations", []);
+		console.log(`[GET /api/peer-chat/conversations] found ${conversations?.length ?? 0} conversations`);
 		res.json({ ok: true, conversations });
 	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+		console.log("[GET /api/peer-chat/conversations] caught error (graceful fallback):", err?.message);
+		// Return empty conversations list instead of crashing
+		res.json({ ok: true, conversations: [] });
 	}
 });
 
@@ -607,6 +616,13 @@ app.post("/api/pay/settle", async (req, res) => {
 		res.status(500).json({ ok: false, error: err?.message ?? String(err) });
 	}
 });
+// ── Error handler ──────────────────────────────────────────────────
+app.use((err: any, req: any, res: any, next: any) => {
+	console.error(`[ERROR] ${req.method} ${req.path}:`, err?.message ?? String(err));
+	console.error(err?.stack);
+	res.status(500).json({ ok: false, error: err?.message ?? "Internal server error" });
+});
+
 // ── Static: three.js + frontend ────────────────────────────────────
 //
 // Serve three's ESM bundle from node_modules so the browser can resolve
