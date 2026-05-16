@@ -2000,18 +2000,26 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	align-items: center;
 	justify-content: space-between;
 }
-.auctions-icon-btn {
-	width: 24px;
-	height: 24px;
-	display: grid;
-	place-items: center;
-	background: transparent;
+.auctions-create-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	background: var(--accent);
+	color: var(--accent-ink);
 	border: 0;
-	color: var(--text-muted);
+	padding: 7px 14px;
+	border-radius: 8px;
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.01em;
 	cursor: pointer;
-	border-radius: 6px;
+	font-family: inherit;
+	box-shadow: 0 0 12px var(--accent-soft);
+	transition: filter 120ms ease, transform 120ms ease;
 }
-.auctions-icon-btn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+.auctions-create-btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.auctions-create-btn:active { transform: translateY(0); }
+.auctions-create-btn svg { display: block; }
 .auctions-sub {
 	padding: 0 0 8px;
 	font-size: 11px;
