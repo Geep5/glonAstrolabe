@@ -131,14 +131,32 @@
 
 		<!-- New-listing form (hidden by default; toggled by header + button) -->
 		<form id="auctions-new-form" class="auctions-new-form" hidden>
-			<label class="auctions-field">
+			<div class="auctions-field">
 				<span>give</span>
-				<input name="give" placeholder="100 <token_id>  or  sword-001" required />
-			</label>
-			<label class="auctions-field">
+				<div class="asset-picker" data-picker="give" data-mode="coins">
+					<div class="asset-picker-coins">
+						<select class="asset-token-select mono" data-role="token"></select>
+						<input class="asset-amount mono" data-role="amount" type="text" inputmode="numeric" placeholder="amount" />
+					</div>
+					<input class="asset-item mono" data-role="item" type="text" placeholder="item id (e.g. sword-001)" hidden />
+					<button type="button" class="asset-mode-toggle" data-picker-target="give">use unique item instead</button>
+				</div>
+			</div>
+			<div class="auctions-field">
 				<span>asking price (optional)</span>
-				<input name="want" placeholder="50 <token_id>  — leave blank for open offers" />
-			</label>
+				<div class="asset-picker" data-picker="want" data-mode="none">
+					<div class="asset-picker-coins">
+						<select class="asset-token-select mono" data-role="token"></select>
+						<input class="asset-amount mono" data-role="amount" type="text" inputmode="numeric" placeholder="amount" />
+					</div>
+					<input class="asset-item mono" data-role="item" type="text" placeholder="item id" hidden />
+					<div class="asset-mode-buttons">
+						<button type="button" class="asset-mode-toggle" data-picker-target="want" data-want-mode="coins">accept coins</button>
+						<button type="button" class="asset-mode-toggle" data-picker-target="want" data-want-mode="item">accept item</button>
+						<button type="button" class="asset-mode-toggle" data-picker-target="want" data-want-mode="none">open offers</button>
+					</div>
+				</div>
+			</div>
 			<label class="auctions-field">
 				<span>directed to (optional)</span>
 				<input name="recipient" placeholder="64-hex chain pubkey — leave blank for public" />

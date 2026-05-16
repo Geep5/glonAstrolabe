@@ -2452,6 +2452,56 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	font-size: 10px;
 	min-height: 12px;
 }
+.asset-picker {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.asset-picker-coins {
+	display: grid;
+	grid-template-columns: 1fr 100px;
+	gap: 6px;
+}
+.asset-token-select,
+.asset-amount,
+.asset-item {
+	background: rgba(0, 0, 0, 0.3);
+	border: 1px solid var(--stroke);
+	color: var(--text);
+	padding: 6px 8px;
+	border-radius: 6px;
+	font-family: 'JetBrains Mono', ui-monospace, monospace;
+	font-size: 12px;
+	outline: none;
+}
+.asset-token-select { appearance: none; cursor: pointer; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%), linear-gradient(135deg, var(--text-muted) 50%, transparent 50%); background-position: calc(100% - 12px) center, calc(100% - 8px) center; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+.asset-token-select:focus,
+.asset-amount:focus,
+.asset-item:focus { border-color: var(--accent); }
+.asset-mode-toggle {
+	background: transparent;
+	border: 1px solid var(--stroke);
+	border-radius: 5px;
+	color: var(--text-muted);
+	padding: 4px 8px;
+	font-size: 10px;
+	cursor: pointer;
+	font-family: inherit;
+	text-transform: lowercase;
+	letter-spacing: 0.02em;
+}
+.asset-mode-toggle:hover { color: var(--text); border-color: var(--stroke-strong); }
+.asset-mode-toggle.active {
+	background: var(--accent-soft);
+	color: var(--accent);
+	border-color: var(--accent);
+}
+.asset-mode-buttons {
+	display: flex;
+	gap: 4px;
+	flex-wrap: wrap;
+}
+
 .auctions-mode-hint {
 	padding: 4px 8px;
 	border-radius: 3px;

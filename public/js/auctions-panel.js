@@ -68,6 +68,38 @@ async function ensureCoinLabels(tokenIds) {
 	} catch { /* leave hex */ }
 }
 
+/** All tokens on the network (cache, refreshed when form opens). */
+let ALL_TOKENS = [];
+/** Map token_id → bigint of my aggregate balance across all wallet keys. */
+let MY_BALANCES = new Map();
+
+async function loadTokensAndBalances() {
+	try {
+		const r = await fetch("/api/coins").then((res) => res.json());
+		ALL_TOKENS = (r?.tokens ?? []).map((t) => ({
+			token_id: t.token_id,
+			name: t.name,
+			symbol: t.symbol,
+			supply: t.supply,
+		}));
+		for (const t of ALL_TOKENS) {
+			COIN_LABEL_CACHE.set(t.token_id, { name: t.name, symbol: t.symbol });
+		}
+	} catch { ALL_TOKENS = []; }
+	// Fetch holders for each token and aggregate my balance.
+	MY_BALANCES = new Map();
+	await Promise.all(ALL_TOKENS.map(async (t) => {
+		try {
+			const hr = await fetch(`/api/coins/${encodeURIComponent(t.token_id)}/holders`).then((res) => res.json());
+			let myBal = 0n;
+			for (const h of (hr?.holders ?? [])) {
+				if (LOCAL_WALLET_KEYS.has(h.pubkey)) myBal += BigInt(h.balance ?? "0");
+			}
+			if (myBal > 0n) MY_BALANCES.set(t.token_id, myBal);
+		} catch { /* skip */ }
+	}));
+}
+
 // ── Asset formatting ────────────────────────────────────────────
 
 function shortKey(k) {
@@ -563,10 +595,66 @@ function toast(text, kind = "ok") {
 
 // ── New-listing form ────────────────────────────────────────────
 
+/** Read an asset-picker's current state and produce an asset object
+ *  (null if nothing selected / nothing typed). */
+function readPicker(form, pickerName) {
+	const picker = form.querySelector(`.asset-picker[data-picker="${pickerName}"]`);
+	if (!picker) return null;
+	const mode = picker.getAttribute("data-mode");
+	if (mode === "none") return null;
+	if (mode === "item") {
+		const v = picker.querySelector('[data-role="item"]').value.trim();
+		return v ? { object_id: v } : null;
+	}
+	// coins mode
+	const token = picker.querySelector('[data-role="token"]').value;
+	const amount = picker.querySelector('[data-role="amount"]').value.trim();
+	if (!token || !amount) return null;
+	return { token, amount };
+}
+
+/** Populate the <select> inside a picker with token options.
+ *  `scope` = "owned" (only my-balance > 0) or "all". */
+function populatePickerOptions(picker, scope) {
+	const sel = picker.querySelector('[data-role="token"]');
+	const existing = sel.value;
+	const tokens = (scope === "owned")
+		? ALL_TOKENS.filter((t) => MY_BALANCES.has(t.token_id))
+		: ALL_TOKENS;
+	const opts = tokens.map((t) => {
+		const sym = t.symbol ?? t.name ?? t.token_id.slice(0, 8);
+		const balStr = MY_BALANCES.has(t.token_id) ? `  ·  bal ${MY_BALANCES.get(t.token_id).toString()}` : "";
+		return `<option value="${escapeHtml(t.token_id)}">${escapeHtml(sym)}${escapeHtml(balStr)}</option>`;
+	}).join("");
+	const emptyOpt = tokens.length === 0
+		? `<option value="" disabled selected>${scope === "owned" ? "no coins owned" : "no tokens deployed"}</option>`
+		: "";
+	sel.innerHTML = emptyOpt + opts;
+	if (existing && tokens.some((t) => t.token_id === existing)) sel.value = existing;
+}
+
+/** Switch a picker between coins / item / none. Re-renders inputs accordingly. */
+function setPickerMode(picker, mode) {
+	picker.setAttribute("data-mode", mode);
+	const coinsBox = picker.querySelector(".asset-picker-coins");
+	const itemBox  = picker.querySelector('[data-role="item"]');
+	if (mode === "coins") { coinsBox.hidden = false; itemBox.hidden = true; }
+	else if (mode === "item") { coinsBox.hidden = true; itemBox.hidden = false; }
+	else { coinsBox.hidden = true; itemBox.hidden = true; }
+	// Highlight the active toggle for the multi-toggle "want" picker.
+	for (const b of picker.querySelectorAll(".asset-mode-toggle")) {
+		const wm = b.getAttribute("data-want-mode");
+		if (wm) b.classList.toggle("active", wm === mode);
+	}
+	// Update the live mode-hint chip whenever a picker state changes.
+	const form = picker.closest("form");
+	if (form) updateModeHint(form);
+}
+
 function updateModeHint(form) {
 	const hint = document.getElementById("auctions-mode-hint");
 	if (!hint) return;
-	const want = (form.elements.namedItem("want")?.value ?? "").trim();
+	const want = readPicker(form, "want");
 	const recipient = (form.elements.namedItem("recipient")?.value ?? "").trim();
 	let label, cls;
 	if (!want && !recipient)     { label = "mode: open auction (any bid welcome)";        cls = "mode-open"; }
@@ -580,14 +668,13 @@ function updateModeHint(form) {
 async function submitNewAuction(form) {
 	const errEl = document.getElementById("auctions-form-error");
 	errEl.textContent = "";
+	const give = readPicker(form, "give");
+	const want = readPicker(form, "want");
 	const data = new FormData(form);
-	const give = parseAssetField(data.get("give"));
-	const wantSpec = (data.get("want") ?? "").toString().trim();
-	const want = wantSpec ? parseAssetField(wantSpec) : null;
 	const recipient = (data.get("recipient") ?? "").toString().trim() || undefined;
 	const expires = (data.get("expires") ?? "24h").toString().trim();
 	const keyName = (data.get("keyName") ?? "default").toString().trim();
-	if (!give) { errEl.textContent = "give field required"; return; }
+	if (!give) { errEl.textContent = "pick a token + amount or an item for 'give'"; return; }
 	const expiryMs = parseDurationMs(expires);
 	if (expiryMs === null) { errEl.textContent = "expires: use forms like 30m, 1h, 2d"; return; }
 	const body = {
@@ -601,6 +688,15 @@ async function submitNewAuction(form) {
 		await postJSON("/api/auctions/post", body);
 		form.reset();
 		form.hidden = true;
+		// Reset pickers to defaults.
+		for (const picker of form.querySelectorAll(".asset-picker")) {
+			const init = picker.getAttribute("data-picker") === "give" ? "coins" : "none";
+			setPickerMode(picker, init);
+			const item = picker.querySelector('[data-role="item"]');
+			const amt  = picker.querySelector('[data-role="amount"]');
+			if (item) item.value = "";
+			if (amt)  amt.value = "";
+		}
 		toast(`Listing posted`);
 		lastRender = "";
 		refresh();
@@ -615,21 +711,52 @@ function wireForm() {
 	const cancelBtn = document.getElementById("auctions-cancel-btn");
 	if (!btn || !form || !cancelBtn) return;
 
-	btn.addEventListener("click", () => {
+	btn.addEventListener("click", async () => {
 		form.hidden = !form.hidden;
 		if (!form.hidden) {
+			// Refresh tokens + balances when opening — picks up new deploys.
+			await loadTokensAndBalances();
+			for (const picker of form.querySelectorAll(".asset-picker")) {
+				const name = picker.getAttribute("data-picker");
+				const scope = name === "give" ? "owned" : "all";
+				populatePickerOptions(picker, scope);
+			}
 			updateModeHint(form);
-			form.querySelector('input[name="give"]')?.focus();
+			form.querySelector('.asset-picker[data-picker="give"] [data-role="amount"]')?.focus();
 		}
 	});
 	cancelBtn.addEventListener("click", () => {
 		form.hidden = true;
 		document.getElementById("auctions-form-error").textContent = "";
 	});
-	for (const name of ["want", "recipient"]) {
-		const el = form.elements.namedItem(name);
-		el?.addEventListener("input", () => updateModeHint(form));
+
+	// Picker mode toggles.
+	for (const btn of form.querySelectorAll(".asset-mode-toggle")) {
+		btn.addEventListener("click", () => {
+			const target = btn.getAttribute("data-picker-target");
+			const picker = form.querySelector(`.asset-picker[data-picker="${target}"]`);
+			if (!picker) return;
+			const explicit = btn.getAttribute("data-want-mode");
+			if (explicit) {
+				setPickerMode(picker, explicit);
+			} else {
+				// Single-toggle (used by `give`): flip coins ⇄ item.
+				const cur = picker.getAttribute("data-mode");
+				const next = cur === "coins" ? "item" : "coins";
+				setPickerMode(picker, next);
+				btn.textContent = next === "coins" ? "use unique item instead" : "use coins instead";
+			}
+		});
 	}
+
+	// Picker state changes → live update the mode chip.
+	for (const picker of form.querySelectorAll(".asset-picker")) {
+		picker.addEventListener("input", () => updateModeHint(form));
+		picker.addEventListener("change", () => updateModeHint(form));
+	}
+	const recipientInput = form.elements.namedItem("recipient");
+	recipientInput?.addEventListener("input", () => updateModeHint(form));
+
 	form.addEventListener("submit", (e) => {
 		e.preventDefault();
 		submitNewAuction(form);
