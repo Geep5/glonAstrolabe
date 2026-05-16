@@ -1,25 +1,52 @@
-// Auctions panel — live view of the autobase auction house.
+// Auctions panel — Valencia-styled listings UI over the live autobase.
 //
-// Polls /api/auctions and /api/auction/status every AUCTIONS_POLL_MS,
-// renders rows into #auctions-list. Each row shows the give/want assets,
-// status, and (for the seller's own auctions) a Cancel button.
+// Tabs (open / mine / my bids / all), search, sort (hot / ending / new /
+// price), column-based row layout (give ⇄ want | top bid | trend | expires),
+// expandable rows with bid history + sparkline + inline bid form, post
+// form for sellers, accept-bid button per bid for sellers, toast on bid
+// submission.
 //
-// If /api/auction/status returns 503, the panel hides itself —
-// daemon was started without GLON_AUCTION=1.
+// All data is live. Reads /api/auctions, /api/auctions/:id/bids,
+// /api/wallet. Writes via /api/auctions/{post,bid,settle,cancel}.
 
 const POLL_MS = 5_000;
+const COIN_LABEL_CACHE = new Map(); // token_id → { name, symbol }
 
-let AUCTIONS_PANEL  = null;
-let AUCTIONS_LIST   = null;
-let AUCTIONS_COUNT  = null;
-let AUCTIONS_STATUS = null;
-let lastRender = "";
+let PANEL = null, LIST = null, COUNT = null, STATUS = null, FOOTER = null;
+let SEARCH = null, TABS = null, SORTS = null;
 
-/** Local chain pubkeys (from /api/wallet) — used to detect "my auction". */
 let LOCAL_WALLET_KEYS = new Set();
+let TAB  = "open";
+let SORT = "hot";
+let SEARCH_Q = "";
 
-/** Auction IDs whose bids the user has expanded inline. Persists across polls. */
-const expandedAuctions = new Set();
+/** Auctions currently expanded inline. */
+const expanded = new Set();
+/** Bid history cache: auctionId → array of bid records (newest first). */
+const bidsCache = new Map();
+/** Auction IDs we know the local user has bid on. */
+const myBidIds = new Set();
+/** Bid-form state per auction (open + status). */
+const bidForm = new Map();
+
+// ── Fetch helpers ────────────────────────────────────────────────
+
+async function getJSON(url) {
+	const res = await fetch(url);
+	const j = await res.json().catch(() => null);
+	if (!res.ok || j?.ok === false) throw new Error(j?.error ?? `HTTP ${res.status}`);
+	return j;
+}
+async function postJSON(url, body) {
+	const res = await fetch(url, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: body !== undefined ? JSON.stringify(body) : undefined,
+	});
+	const j = await res.json().catch(() => null);
+	if (!res.ok || j?.ok === false) throw new Error(j?.error ?? `HTTP ${res.status}`);
+	return j;
+}
 
 async function loadWalletKeys() {
 	try {
@@ -30,73 +57,324 @@ async function loadWalletKeys() {
 	}
 }
 
-function shortKey(key) {
-	if (!key || typeof key !== "string") return "";
-	return key.length > 16 ? key.slice(0, 12) + "…" : key;
+async function ensureCoinLabels(tokenIds) {
+	const missing = [...tokenIds].filter((t) => !COIN_LABEL_CACHE.has(t));
+	if (missing.length === 0) return;
+	try {
+		const r = await fetch("/api/coins").then((res) => res.json());
+		for (const t of (r?.tokens ?? [])) {
+			COIN_LABEL_CACHE.set(t.token_id, { name: t.name, symbol: t.symbol });
+		}
+	} catch { /* leave hex */ }
+}
+
+// ── Asset formatting ────────────────────────────────────────────
+
+function shortKey(k) {
+	if (!k || typeof k !== "string") return "—";
+	if (k.length <= 12) return k;
+	return k.slice(0, 6) + "…" + k.slice(-4);
 }
 
 function escapeHtml(s) {
-	return String(s)
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;");
+	return String(s).replace(/[&<>"']/g, (c) =>
+		({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function fmtAsset(a) {
-	if (!a) return "";
-	if (a.object_id) return `<span class="asset-obj">${escapeHtml(a.object_id)}</span>`;
-	if (a.token && a.amount) return `<span class="asset-fungible"><b>${escapeHtml(a.amount)}</b> ${escapeHtml(a.token.slice(0, 8))}</span>`;
-	return "<span class='asset-unknown'>?</span>";
+function tokenLabel(tokenId) {
+	const meta = COIN_LABEL_CACHE.get(tokenId);
+	return meta?.symbol ?? tokenId.slice(0, 8) + "…";
 }
 
-function statusBadge(status) {
-	const cls = (status === "open") ? "ok"
-		: (status === "settled") ? "info"
-		: (status === "cancelled") ? "muted"
-		: (status === "expired") ? "muted"
-		: "warn";
-	return `<span class="auction-status ${cls}">${escapeHtml(status ?? "?")}</span>`;
-}
-
-/** Render "23h 45m" / "12m" / "in 3s" / "expired 5m ago". Compact + drift-aware. */
-function expiryLabel(auction, nowMs) {
-	if (!auction || typeof auction.expiry_ms !== "number") return "";
-	if (auction.status === "expired") {
-		const ago = Math.max(0, Math.floor((nowMs - (auction.expired_at ?? auction.expiry_ms)) / 1000));
-		return `expired ${formatSecsAgo(ago)}`;
+function assetLabel(a) {
+	if (!a) return { label: "—", detail: "", kind: "data" };
+	if (a.object_id) {
+		return { label: a.object_id, detail: "object", kind: "item" };
 	}
-	if (auction.status !== "open") return ""; // settled/cancelled — irrelevant
-	const remainSec = Math.floor((auction.expiry_ms - nowMs) / 1000);
-	if (remainSec <= 0) return "stale (past deadline)";
-	return formatSecsRemaining(remainSec);
+	if (a.token && a.amount) {
+		return {
+			label: `${Number(a.amount).toLocaleString()} ${tokenLabel(a.token)}`,
+			detail: `coin · ${a.token.slice(0, 8)}…`,
+			kind: "coin",
+		};
+	}
+	return { label: "?", detail: "", kind: "data" };
 }
 
-function formatSecsRemaining(s) {
-	if (s < 60) return `in ${s}s`;
-	if (s < 3600) return `in ${Math.floor(s / 60)}m`;
-	if (s < 86400) return `in ${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-	return `in ${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+function fmtTimeLeft(expires) {
+	let s = Math.max(0, Math.floor((expires - Date.now()) / 1000));
+	const d = Math.floor(s / 86400); s -= d * 86400;
+	const h = Math.floor(s / 3600); s -= h * 3600;
+	const m = Math.floor(s / 60); s -= m * 60;
+	if (d > 0) return `${d}d ${h}h`;
+	if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+	if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
+	return `${s}s`;
 }
 
-function formatSecsAgo(s) {
+function fmtAgo(ms) {
+	const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
 	if (s < 60) return `${s}s ago`;
 	if (s < 3600) return `${Math.floor(s / 60)}m ago`;
 	if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
 	return `${Math.floor(s / 86400)}d ago`;
 }
 
-async function postAction(url, body) {
-	const res = await fetch(url, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: body !== undefined ? JSON.stringify(body) : undefined,
-	});
-	const json = await res.json().catch(() => null);
-	if (!res.ok || json?.ok === false) throw new Error(json?.error ?? `HTTP ${res.status}`);
-	return json;
+function parseDurationMs(spec) {
+	const m = /^(\d+)(ms|s|m|h|d)?$/.exec((spec ?? "").toString().trim().toLowerCase());
+	if (!m) return null;
+	const n = parseInt(m[1], 10);
+	if (!Number.isFinite(n) || n <= 0) return null;
+	switch (m[2]) {
+		case "d":  return n * 86_400_000;
+		case "h":  return n * 3_600_000;
+		case "m":  return n * 60_000;
+		case "s":  return n * 1_000;
+		case "ms":
+		default:   return n;
+	}
 }
 
+function parseAssetField(spec) {
+	const s = (spec ?? "").toString().trim();
+	if (!s) return null;
+	const fungible = /^(\d+)\s+([0-9a-zA-Z_.-]+)$/.exec(s);
+	if (fungible) return { token: fungible[2], amount: fungible[1] };
+	return { object_id: s };
+}
+
+// ── Sparkline ────────────────────────────────────────────────────
+
+function sparkline(bids) {
+	if (!bids || bids.length < 2) {
+		return `<div class="auction-spark-empty"></div>`;
+	}
+	// Reverse so the path goes left-to-right oldest→newest.
+	const pts = [...bids].reverse()
+		.map((b) => Number(b.offer?.[0]?.amount ?? 0))
+		.filter((v) => Number.isFinite(v));
+	if (pts.length < 2) return `<div class="auction-spark-empty"></div>`;
+	const min = Math.min(...pts), max = Math.max(...pts);
+	const range = max - min || 1;
+	const w = 56, h = 18;
+	const step = w / (pts.length - 1);
+	const path = pts.map((v, i) => {
+		const x = i * step;
+		const y = h - ((v - min) / range) * h;
+		return `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+	}).join(" ");
+	const lastY = h - ((pts[pts.length - 1] - min) / range) * h;
+	return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" class="auction-spark"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.2"/><circle cx="${w}" cy="${lastY.toFixed(1)}" r="2" fill="var(--accent)"/></svg>`;
+}
+
+// ── Tab + filter logic ──────────────────────────────────────────
+
+function filterAuctions(auctions) {
+	let list = auctions;
+	if (TAB === "open")      list = list.filter((a) => a.status === "open");
+	else if (TAB === "mine") list = list.filter((a) => LOCAL_WALLET_KEYS.has(a.seller_pubkey));
+	else if (TAB === "bids") list = list.filter((a) => myBidIds.has(a.id));
+	// "all" = no filter
+	if (SEARCH_Q) {
+		const q = SEARCH_Q.toLowerCase();
+		list = list.filter((a) => {
+			const give = (a.give ?? []).map(assetLabel).map((x) => x.label).join(" ");
+			const want = (a.want ?? []).map(assetLabel).map((x) => x.label).join(" ");
+			return (a.id ?? "").toLowerCase().includes(q)
+				|| (a.seller_pubkey ?? "").toLowerCase().includes(q)
+				|| give.toLowerCase().includes(q)
+				|| want.toLowerCase().includes(q);
+		});
+	}
+	if (SORT === "hot") {
+		list = [...list].sort((a, b) => (bidCount(b) - bidCount(a)) || ((b.created_at ?? 0) - (a.created_at ?? 0)));
+	} else if (SORT === "ending") {
+		list = [...list].sort((a, b) => (a.expiry_ms ?? Infinity) - (b.expiry_ms ?? Infinity));
+	} else if (SORT === "new") {
+		list = [...list].sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+	} else if (SORT === "price") {
+		list = [...list].sort((a, b) => topBidAmount(b) - topBidAmount(a));
+	}
+	return list;
+}
+
+function bidCount(auction) {
+	return (bidsCache.get(auction.id) ?? []).length;
+}
+function topBid(auction) {
+	const b = bidsCache.get(auction.id) ?? [];
+	if (b.length === 0) return null;
+	// "Top" = highest first-asset amount. v1 simplification.
+	return b.reduce((best, x) => (topBidValue(x) > topBidValue(best) ? x : best), b[0]);
+}
+function topBidAmount(auction) {
+	const t = topBid(auction);
+	return t ? topBidValue(t) : 0;
+}
+function topBidValue(bid) {
+	return Number(bid?.offer?.[0]?.amount ?? 0);
+}
+
+// ── Rendering ────────────────────────────────────────────────────
+
+function statusBadge(status) {
+	const cls = status === "open" ? "ok"
+		: status === "settled" ? "info"
+		: (status === "cancelled" || status === "expired") ? "muted"
+		: "warn";
+	return `<span class="auction-status ${cls}">${escapeHtml(status ?? "?")}</span>`;
+}
+
+function renderRow(a, status) {
+	const giveAssets = (a.give ?? []).map(assetLabel);
+	const wantAssets = (a.want ?? []).map(assetLabel);
+	const isMine = LOCAL_WALLET_KEYS.has(a.seller_pubkey);
+	const isExpanded = expanded.has(a.id);
+	const expiringSoon = a.status === "open" && typeof a.expiry_ms === "number" && (a.expiry_ms - Date.now()) < 30 * 60_000;
+	const stripeCls = isMine ? "stripe-mine" : (expiringSoon ? "stripe-soon" : "");
+	const tb = topBid(a);
+	const bidsN = bidCount(a);
+	const wantText = wantAssets.length > 0
+		? wantAssets.map((x) => `<span class="mono asset-label">${escapeHtml(x.label)}</span>`).join("")
+		: (a.recipient_pubkey
+			? `<span class="muted small">(gift to ${shortKey(a.recipient_pubkey)})</span>`
+			: `<span class="muted small">(open · any offer)</span>`);
+	const giveText = giveAssets.map((x) => `<span class="mono asset-label">${escapeHtml(x.label)}</span>`).join("");
+
+	const topBidCell = tb
+		? `<div class="bid-amt mono">${escapeHtml(String(topBidValue(tb).toLocaleString()))}</div>
+		   <div class="bid-count mono small">${bidsN} bid${bidsN === 1 ? "" : "s"}</div>`
+		: `<div class="muted small">no bids</div>`;
+
+	const expiresColor = expiringSoon ? "var(--orange)" : "var(--text-muted)";
+	const expiresLabel = a.status === "open"
+		? fmtTimeLeft(a.expiry_ms ?? 0)
+		: (a.status === "expired" ? "expired" : (a.status === "settled" ? "settled" : "—"));
+	const expiresMeta = isMine ? "yours" : shortKey(a.seller_pubkey);
+
+	return `
+		<li class="auction-row-new ${isExpanded ? "expanded" : ""} ${stripeCls}" data-id="${escapeHtml(a.id)}">
+			<div class="auction-row-main" data-toggle="${escapeHtml(a.id)}">
+				<div class="col-give cell-asset">
+					<span class="type-dot type-${giveAssets[0]?.kind ?? "data"}"></span>
+					<div class="cell-asset-text">
+						${giveText || `<span class="muted small">—</span>`}
+					</div>
+				</div>
+				<div class="col-arrow">⇄</div>
+				<div class="col-want cell-asset">
+					<span class="type-dot type-${wantAssets[0]?.kind ?? "data"}"></span>
+					<div class="cell-asset-text">${wantText}</div>
+				</div>
+				<div class="col-bid">${topBidCell}</div>
+				<div class="col-trend">${sparkline(bidsCache.get(a.id))}</div>
+				<div class="col-expires">
+					<div class="mono" style="color: ${expiresColor}; font-weight: 500;">${escapeHtml(expiresLabel)}</div>
+					<div class="muted small">${escapeHtml(expiresMeta)}</div>
+				</div>
+			</div>
+			${isExpanded ? renderExpanded(a, status) : ""}
+		</li>
+	`;
+}
+
+function renderExpanded(a, status) {
+	const isMine = LOCAL_WALLET_KEYS.has(a.seller_pubkey);
+	const bids = bidsCache.get(a.id) ?? [];
+	const giveAssets = (a.give ?? []).map(assetLabel);
+	const isOpen = a.status === "open";
+
+	let formHtml = "";
+	if (isOpen) {
+		if (isMine) {
+			formHtml = `
+				<div class="exp-mine-actions">
+					<button class="ghost-btn" data-action="cancel" data-id="${escapeHtml(a.id)}">cancel listing</button>
+				</div>
+			`;
+		} else {
+			const state = bidForm.get(a.id) ?? { status: "idle", amount: "" };
+			const isBusy = state.status === "signing" || state.status === "confirming";
+			const isConfirmed = state.status === "confirmed";
+			formHtml = `
+				<div class="exp-bid-form">
+					<div class="exp-label">place bid</div>
+					<div class="bid-form-row">
+						<div class="bid-form-input-wrap">
+							<input class="bid-form-input mono"
+								name="bid-amount-${escapeHtml(a.id)}"
+								value="${escapeHtml(state.amount)}"
+								placeholder="amount + token_id"
+								data-id="${escapeHtml(a.id)}"
+								${isBusy || isConfirmed ? "disabled" : ""} />
+						</div>
+						<button class="bid-form-submit ${isConfirmed ? "confirmed" : ""}"
+							data-action="bid"
+							data-id="${escapeHtml(a.id)}"
+							${isBusy || isConfirmed ? "disabled" : ""}>
+							${state.status === "idle" ? "place bid"
+							: state.status === "signing" ? '<span class="spinner"></span> signing'
+							: state.status === "confirming" ? '<span class="spinner"></span> confirming'
+							: state.status === "confirmed" ? "✓ posted"
+							: state.status === "error" ? "retry" : "place bid"}
+						</button>
+					</div>
+					<div class="bid-form-hint mono small">
+						${state.status === "error" ? `<span style="color: var(--err)">${escapeHtml(state.error ?? "failed")}</span>`
+						: state.status === "idle" ? `format: <span class="mono">100 &lt;token_id&gt;</span> or <span class="mono">item-id</span>`
+						: state.status === "signing" ? "signing with key default…"
+						: state.status === "confirming" ? "awaiting consensus…"
+						: state.status === "confirmed" ? "bid live on the ledger" : ""}
+					</div>
+				</div>
+			`;
+		}
+	}
+
+	const bidHistory = bids.length === 0
+		? `<div class="muted small">No bids yet${isMine ? " — share your listing." : " — be the first."}</div>`
+		: `<div class="bid-history-grid">
+			${bids.slice(0, 8).map((b, i) => {
+				const isTop = b === topBid(a);
+				const offerStr = (b.offer ?? []).map(assetLabel).map((x) => x.label).join(" + ");
+				const acceptBtn = isMine
+					? `<button class="accept-btn"
+						data-action="accept"
+						data-auction="${escapeHtml(a.id)}"
+						data-winner="${escapeHtml(b.bidder_pubkey)}"
+						data-at="${b.created_at}">accept</button>`
+					: "";
+				return `
+					<div class="bid-history-row${isTop ? " top" : ""}">
+						<div class="bid-history-who mono">${escapeHtml(shortKey(b.bidder_pubkey))}${isTop ? ' <span class="top-marker">● top</span>' : ""}</div>
+						<div class="bid-history-amt mono">${escapeHtml(offerStr)}</div>
+						<div class="bid-history-age mono small">${escapeHtml(fmtAgo(b.created_at))}</div>
+						<div class="bid-history-action">${acceptBtn}</div>
+					</div>`;
+			}).join("")}
+		</div>`;
+
+	return `
+		<div class="auction-expanded">
+			<div class="exp-meta-row">
+				<span class="chip mono"><span class="dot" style="background: var(--accent)"></span>offer · ${escapeHtml(a.id.slice(0, 8))}</span>
+				<span class="chip mono">seller ${escapeHtml(shortKey(a.seller_pubkey))}${isMine ? " · you" : ""}</span>
+				<span class="chip mono">posted ${escapeHtml(fmtAgo(a.created_at))}</span>
+				${a.recipient_pubkey ? `<span class="chip mono">to ${escapeHtml(shortKey(a.recipient_pubkey))}</span>` : ""}
+				<span class="chip mono">${statusBadge(a.status)}</span>
+			</div>
+			<div class="exp-section">
+				<div class="exp-label">bid history</div>
+				${bidHistory}
+			</div>
+			${formHtml}
+		</div>
+	`;
+}
+
+// ── Refresh ──────────────────────────────────────────────────────
+
+let lastRender = "";
 async function refresh() {
 	let status = null;
 	let auctions = [];
@@ -106,257 +384,197 @@ async function refresh() {
 			fetch("/api/auction/status").then((r) => r.json()),
 			fetch("/api/auctions").then((r) => r.json()),
 		]);
-		if (s?.ok) status = s.status;
-		else unreachable = true;
+		if (s?.ok) status = s.status; else unreachable = true;
 		if (a?.ok) auctions = a.auctions ?? [];
-	} catch {
-		unreachable = true;
-	}
+	} catch { unreachable = true; }
 
-	if (unreachable || !status || !status.bootstrap_key) {
-		AUCTIONS_PANEL.hidden = true;
+	if (unreachable || !status?.bootstrap_key) {
+		PANEL.hidden = true;
 		return;
 	}
-	AUCTIONS_PANEL.hidden = false;
+	PANEL.hidden = false;
 
+	// Collect token IDs that need labels.
+	const tokenIds = new Set();
+	for (const a of auctions) {
+		for (const x of (a.give ?? [])) if (x.token) tokenIds.add(x.token);
+		for (const x of (a.want ?? [])) if (x.token) tokenIds.add(x.token);
+	}
+	await ensureCoinLabels(tokenIds);
+
+	// Lazy-load bids for visible (filtered) auctions in the open tab AND any expanded ones.
+	const visible = filterAuctions(auctions);
+	const needBids = new Set();
+	for (const a of visible) if (a.status === "open") needBids.add(a.id);
+	for (const id of expanded) needBids.add(id);
+	await Promise.all([...needBids].map(async (id) => {
+		try {
+			const r = await fetch(`/api/auctions/${encodeURIComponent(id)}/bids`).then((res) => res.json());
+			if (r?.ok) {
+				const bids = r.bids ?? [];
+				bidsCache.set(id, bids);
+				// Track my bids
+				for (const b of bids) {
+					if (LOCAL_WALLET_KEYS.has(b.bidder_pubkey)) myBidIds.add(id);
+				}
+			}
+		} catch { /* leave stale */ }
+	}));
+
+	// Header / footer / tab counts
 	const writerShort = shortKey(status.writer_pubkey);
-	AUCTIONS_COUNT.textContent = String(auctions.length);
-	AUCTIONS_STATUS.textContent = `writer ${writerShort} · ${status.view_length ?? 0} view entries · ${status.system_length ?? 0} ops`;
+	const total = auctions.length;
+	const mineN = auctions.filter((a) => LOCAL_WALLET_KEYS.has(a.seller_pubkey)).length;
+	const openN = auctions.filter((a) => a.status === "open").length;
+	const bidsN = auctions.filter((a) => myBidIds.has(a.id)).length;
+	COUNT.textContent = String(visible.length);
+	STATUS.textContent = `reader ${writerShort} · ${total} listings · ${status.view_length ?? 0} view ops`;
+	document.getElementById("tab-count-open").textContent = openN;
+	document.getElementById("tab-count-mine").textContent = mineN;
+	document.getElementById("tab-count-bids").textContent = bidsN;
+	document.getElementById("tab-count-all").textContent  = total;
 
-	// Sort: open auctions first, then settled, then cancelled, then expired.
-	// Within each bucket, newest created_at first.
-	const order = { open: 0, settled: 1, cancelled: 2, expired: 3 };
-	const sorted = [...auctions].sort((a, b) => {
-		const sa = order[a.status] ?? 99;
-		const sb = order[b.status] ?? 99;
-		if (sa !== sb) return sa - sb;
-		return (b.created_at ?? 0) - (a.created_at ?? 0);
-	});
+	if (FOOTER) {
+		FOOTER.innerHTML = `<span>view · auction-house · ${total} entries · ${status.system_length ?? 0} ops</span><span>signing key: default</span>`;
+	}
 
-	const nowMs = Date.now();
-	const html = sorted.map((row) => {
-		const give = (row.give ?? []).map(fmtAsset).join(" + ");
-		const wantParts = row.want ?? [];
-		const want = wantParts.length > 0
-			? wantParts.map(fmtAsset).join(" + ")
-			: (row.recipient_pubkey ? "<span class='muted'>(gift)</span>" : "<span class='muted'>(open — any offer)</span>");
-		const sellerShort = shortKey(row.seller_pubkey);
-		const isMine = LOCAL_WALLET_KEYS.has(row.seller_pubkey);
-		const recipient = row.recipient_pubkey ? ` → ${shortKey(row.recipient_pubkey)}` : "";
-		const expiry = expiryLabel(row, nowMs);
-		// Stale = open in the view but past its deadline (no op has touched it
-		// yet to trigger lazy-expire). Show as a soft warning.
-		const isStale = row.status === "open" && typeof row.expiry_ms === "number" && row.expiry_ms <= nowMs;
-		const expiryCls = isStale ? "auction-expiry stale" : "auction-expiry";
-		const isOpen = row.status === "open";
-		const expanded = expandedAuctions.has(row.id);
-
-		const cancelBtn = (isOpen && isMine)
-			? `<button class="auction-cancel" data-id="${escapeHtml(row.id)}">cancel</button>`
-			: "";
-		// Bid / bids actions are only meaningful for open auctions.
-		// Non-mine open auctions get a "bid" button; mine and others both get
-		// a "bids" toggle to see all current bids.
-		const actions = isOpen ? `
-			<button class="auction-bids-toggle" data-id="${escapeHtml(row.id)}">${expanded ? "▾" : "▸"} bids</button>
-			${!isMine ? `<button class="auction-bid-open" data-id="${escapeHtml(row.id)}">+ bid</button>` : ""}
-		` : "";
-
-		return `
-			<li class="auction-row${isMine ? " mine" : ""}" data-id="${escapeHtml(row.id)}">
-				<div class="auction-line">
-					<span class="auction-id">${escapeHtml(row.id.slice(0, 12))}</span>
-					${statusBadge(row.status)}
-					${expiry ? `<span class="${expiryCls}">${escapeHtml(expiry)}</span>` : ""}
-					${isMine ? `<span class="auction-mine-badge">you</span>` : ""}
-				</div>
-				<div class="auction-terms">
-					<span class="give">${give}</span>
-					<span class="for">for</span>
-					<span class="want">${want}</span>
-				</div>
-				<div class="auction-meta muted small">
-					<span class="seller">seller ${sellerShort}${recipient}</span>
-					<span class="auction-row-actions">${cancelBtn} ${actions}</span>
-				</div>
-				${expanded ? `<div class="auction-bids" data-bids-id="${escapeHtml(row.id)}"><div class="muted small">loading bids…</div></div>` : ""}
-				<div class="auction-bid-form-host" data-bid-host-id="${escapeHtml(row.id)}"></div>
-			</li>
-		`;
-	}).join("");
+	// Render rows
+	const html = visible.length === 0
+		? `<li class="auction-empty muted small">No listings match this filter.</li>`
+		: visible.map((a) => renderRow(a, status)).join("");
 
 	if (html !== lastRender) {
-		AUCTIONS_LIST.innerHTML = html;
+		LIST.innerHTML = html;
 		lastRender = html;
-		wireRowActions(status);
-		// Repopulate expanded bid sections.
-		for (const id of expandedAuctions) loadBidsInto(id, status);
+		wireRows();
 	}
 }
 
-function wireRowActions(status) {
-	// Cancel: seller closes their own open auction.
-	for (const btn of AUCTIONS_LIST.querySelectorAll(".auction-cancel")) {
-		btn.addEventListener("click", async (e) => {
-			const id = e.currentTarget.getAttribute("data-id");
+// ── Event wiring ────────────────────────────────────────────────
+
+function wireRows() {
+	// Toggle expand on row body
+	for (const row of LIST.querySelectorAll(".auction-row-main")) {
+		row.addEventListener("click", (e) => {
+			if (e.target.closest("button") || e.target.closest("input")) return;
+			const id = row.getAttribute("data-toggle");
 			if (!id) return;
+			if (expanded.has(id)) expanded.delete(id);
+			else expanded.add(id);
+			lastRender = ""; refresh();
+		});
+	}
+	// Cancel
+	for (const btn of LIST.querySelectorAll('[data-action="cancel"]')) {
+		btn.addEventListener("click", async (e) => {
+			e.stopPropagation();
+			const id = e.currentTarget.getAttribute("data-id");
 			try {
-				await postAction("/api/auctions/cancel", { auctionId: id, keyName: "default" });
-				lastRender = "";
-				refresh();
+				await postJSON("/api/auctions/cancel", { auctionId: id, keyName: "default" });
+				toast(`Listing ${id.slice(0, 8)} cancelled`);
+				lastRender = ""; refresh();
 			} catch (err) {
-				alert("Cancel failed: " + (err.message ?? err));
+				toast(`Cancel failed: ${err.message ?? err}`, "err");
 			}
 		});
 	}
-
-	// Toggle bids inline.
-	for (const btn of AUCTIONS_LIST.querySelectorAll(".auction-bids-toggle")) {
-		btn.addEventListener("click", (e) => {
-			const id = e.currentTarget.getAttribute("data-id");
-			if (!id) return;
-			if (expandedAuctions.has(id)) expandedAuctions.delete(id);
-			else expandedAuctions.add(id);
-			lastRender = ""; // force redraw with new expanded state
-			refresh();
+	// Accept-bid
+	for (const btn of LIST.querySelectorAll('[data-action="accept"]')) {
+		btn.addEventListener("click", async (e) => {
+			e.stopPropagation();
+			const auctionId = e.currentTarget.getAttribute("data-auction");
+			const winner   = e.currentTarget.getAttribute("data-winner");
+			const at       = parseInt(e.currentTarget.getAttribute("data-at"), 10);
+			try {
+				await postJSON("/api/auctions/settle", { auctionId, winner, winningBidAt: at, keyName: "default" });
+				toast(`Settled · ${shortKey(winner)} wins`);
+				expanded.delete(auctionId);
+				lastRender = ""; refresh();
+			} catch (err) {
+				toast(`Settle failed: ${err.message ?? err}`, "err");
+			}
 		});
 	}
-
-	// Open inline bid form for non-self auctions.
-	for (const btn of AUCTIONS_LIST.querySelectorAll(".auction-bid-open")) {
-		btn.addEventListener("click", (e) => {
+	// Place bid
+	for (const btn of LIST.querySelectorAll('[data-action="bid"]')) {
+		btn.addEventListener("click", async (e) => {
+			e.stopPropagation();
 			const id = e.currentTarget.getAttribute("data-id");
-			openBidForm(id);
+			const input = LIST.querySelector(`input[name="bid-amount-${cssEscape(id)}"]`);
+			const spec = input?.value ?? "";
+			const offer = parseAssetField(spec);
+			if (!offer) {
+				bidForm.set(id, { status: "error", error: "format: 100 <token_id>", amount: spec });
+				lastRender = ""; refresh();
+				return;
+			}
+			bidForm.set(id, { status: "signing", amount: spec });
+			lastRender = ""; refresh();
+			try {
+				bidForm.set(id, { status: "confirming", amount: spec });
+				lastRender = ""; refresh();
+				await postJSON("/api/auctions/bid", { auctionId: id, offer: [offer], keyName: "default" });
+				bidForm.set(id, { status: "confirmed", amount: spec });
+				toast(`Bid posted on ${id.slice(0, 8)}`);
+				lastRender = ""; refresh();
+				// Clear bid-form state after a moment.
+				setTimeout(() => {
+					bidForm.delete(id);
+					lastRender = ""; refresh();
+				}, 2500);
+			} catch (err) {
+				bidForm.set(id, { status: "error", error: err.message ?? String(err), amount: spec });
+				lastRender = ""; refresh();
+			}
+		});
+	}
+	// Bid form input — persist value across re-renders
+	for (const input of LIST.querySelectorAll(".bid-form-input")) {
+		input.addEventListener("input", (e) => {
+			const id = e.currentTarget.getAttribute("data-id");
+			const cur = bidForm.get(id) ?? { status: "idle" };
+			bidForm.set(id, { ...cur, amount: e.currentTarget.value });
 		});
 	}
 }
 
-function openBidForm(auctionId) {
-	const host = AUCTIONS_LIST.querySelector(`.auction-bid-form-host[data-bid-host-id="${cssEscape(auctionId)}"]`);
-	if (!host) return;
-	if (host.querySelector("form")) return; // already open
-	host.innerHTML = `
-		<form class="auction-bid-form" data-auction-id="${escapeHtml(auctionId)}">
-			<label class="auctions-field">
-				<span>offer</span>
-				<input name="offer" placeholder="50 <token_id>" required />
-			</label>
-			<label class="auctions-field">
-				<span>signing key</span>
-				<input name="keyName" value="default" required />
-			</label>
-			<div class="auctions-form-actions">
-				<button type="submit" class="auctions-submit">submit bid</button>
-				<button type="button" class="auctions-cancel-btn" data-action="cancel-bid">cancel</button>
-			</div>
-			<div class="auctions-form-error muted small"></div>
-		</form>
-	`;
-	const form = host.querySelector("form");
-	form.querySelector('input[name="offer"]').focus();
-	form.querySelector('[data-action="cancel-bid"]').addEventListener("click", () => {
-		host.innerHTML = "";
-	});
-	form.addEventListener("submit", async (e) => {
-		e.preventDefault();
-		const errEl = form.querySelector(".auctions-form-error");
-		errEl.textContent = "";
-		const data = new FormData(form);
-		const offer = parseAssetField(data.get("offer"));
-		if (!offer) { errEl.textContent = "offer required (form: <amount> <token_id>)"; return; }
-		const keyName = (data.get("keyName") ?? "default").toString().trim();
-		try {
-			await postAction("/api/auctions/bid", {
-				auctionId,
-				offer: [offer],
-				keyName,
-			});
-			host.innerHTML = "";
-			expandedAuctions.add(auctionId); // pop bids open so the seller sees it
-			lastRender = "";
-			refresh();
-		} catch (err) {
-			errEl.textContent = err.message ?? String(err);
-		}
-	});
-}
-
-async function loadBidsInto(auctionId, status) {
-	const host = AUCTIONS_LIST.querySelector(`.auction-bids[data-bids-id="${cssEscape(auctionId)}"]`);
-	if (!host) return;
-	try {
-		const r = await fetch(`/api/auctions/${encodeURIComponent(auctionId)}/bids`).then((res) => res.json());
-		if (!r?.ok) { host.innerHTML = `<div class="muted small">${escapeHtml(r?.error ?? "no bids")}</div>`; return; }
-		const bids = r.bids ?? [];
-		if (bids.length === 0) {
-			host.innerHTML = `<div class="muted small">no bids yet</div>`;
-			return;
-		}
-		// Find the seller's pubkey from the auction row to decide whether to
-		// show Accept buttons. Cheap re-lookup from the live API state.
-		const auctionRes = await fetch(`/api/auctions/${encodeURIComponent(auctionId)}`).then((res) => res.json());
-		const auction = auctionRes?.auction;
-		const sellerIsMe = auction && LOCAL_WALLET_KEYS.has(auction.seller_pubkey);
-
-		host.innerHTML = bids.map((bid) => {
-			const offerStr = (bid.offer ?? []).map(fmtAsset).join(" + ") || "<span class='muted'>(empty)</span>";
-			const bidderShort = shortKey(bid.bidder_pubkey);
-			const ageMs = Date.now() - (bid.created_at ?? 0);
-			const ageSec = Math.max(0, Math.floor(ageMs / 1000));
-			const acceptBtn = sellerIsMe ? `
-				<button class="auction-accept-bid"
-				        data-auction="${escapeHtml(auctionId)}"
-				        data-winner="${escapeHtml(bid.bidder_pubkey)}"
-				        data-at="${bid.created_at}">accept</button>
-			` : "";
-			return `
-				<div class="auction-bid-row">
-					<div class="auction-bid-line">
-						<span class="auction-bid-bidder">${bidderShort}</span>
-						<span class="auction-bid-age muted small">${formatSecsAgo(ageSec)}</span>
-						${acceptBtn}
-					</div>
-					<div class="auction-bid-offer">${offerStr}</div>
-				</div>
-			`;
-		}).join("");
-		// Wire accept buttons.
-		for (const btn of host.querySelectorAll(".auction-accept-bid")) {
-			btn.addEventListener("click", async (e) => {
-				const auctionId = e.currentTarget.getAttribute("data-auction");
-				const winner = e.currentTarget.getAttribute("data-winner");
-				const at = parseInt(e.currentTarget.getAttribute("data-at"), 10);
-				try {
-					await postAction("/api/auctions/settle", {
-						auctionId,
-						winner,
-						winningBidAt: at,
-						keyName: "default",
-					});
-					expandedAuctions.delete(auctionId);
-					lastRender = "";
-					refresh();
-				} catch (err) {
-					alert("Accept failed: " + (err.message ?? err));
-				}
-			});
-		}
-	} catch (err) {
-		host.innerHTML = `<div class="muted small">failed: ${escapeHtml(err.message ?? String(err))}</div>`;
-	}
-}
-
-/** Minimal CSS-attribute-escape (just the chars that matter for our IDs). */
 function cssEscape(s) {
 	return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
 }
 
-function parseAssetField(spec) {
-	const s = (spec ?? "").trim();
-	if (!s) return null;
-	const fungible = /^(\d+)\s+([0-9a-zA-Z_.-]+)$/.exec(s);
-	if (fungible) return { token: fungible[2], amount: fungible[1] };
-	return { object_id: s };
+// ── Toast ────────────────────────────────────────────────────────
+
+function toast(text, kind = "ok") {
+	const el = document.getElementById("auctions-toast");
+	if (!el) return;
+	el.innerHTML = `
+		<div class="toast-dot ${kind}"></div>
+		<div class="toast-text">${escapeHtml(text)}</div>
+	`;
+	el.hidden = false;
+	el.classList.remove("show");
+	requestAnimationFrame(() => el.classList.add("show"));
+	clearTimeout(toast._t);
+	toast._t = setTimeout(() => {
+		el.classList.remove("show");
+		setTimeout(() => { el.hidden = true; }, 200);
+	}, 3200);
+}
+
+// ── New-listing form ────────────────────────────────────────────
+
+function updateModeHint(form) {
+	const hint = document.getElementById("auctions-mode-hint");
+	if (!hint) return;
+	const want = (form.elements.namedItem("want")?.value ?? "").trim();
+	const recipient = (form.elements.namedItem("recipient")?.value ?? "").trim();
+	let label, cls;
+	if (!want && !recipient)     { label = "mode: open auction (any bid welcome)";        cls = "mode-open"; }
+	else if (!want && recipient) { label = "mode: gift — transfers instantly on post";   cls = "mode-gift"; }
+	else if (want && !recipient) { label = "mode: fixed-price (public)";                 cls = "mode-fixed"; }
+	else                          { label = "mode: directed sale (private)";              cls = "mode-directed"; }
+	hint.textContent = label;
+	hint.className = `auctions-mode-hint muted small ${cls}`;
 }
 
 async function submitNewAuction(form) {
@@ -374,57 +592,21 @@ async function submitNewAuction(form) {
 	if (expiryMs === null) { errEl.textContent = "expires: use forms like 30m, 1h, 2d"; return; }
 	const body = {
 		give: [give],
-		want: want ? [want] : [],   // empty array = open auction (no preset price) or gift (when recipient set)
+		want: want ? [want] : [],
 		keyName,
 		recipient,
 		expiryMs: Date.now() + expiryMs,
 	};
 	try {
-		const res = await fetch("/api/auctions/post", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(body),
-		});
-		const json = await res.json();
-		if (!res.ok || json?.ok === false) throw new Error(json?.error ?? `HTTP ${res.status}`);
+		await postJSON("/api/auctions/post", body);
 		form.reset();
 		form.hidden = true;
-		document.getElementById("auctions-new-btn").hidden = false;
-		lastRender = ""; // force a redraw
+		toast(`Listing posted`);
+		lastRender = "";
 		refresh();
 	} catch (err) {
 		errEl.textContent = err.message ?? String(err);
 	}
-}
-
-/** Mirror of /coin's parseDuration in pure JS (no TS imports). */
-function parseDurationMs(spec) {
-	const m = /^(\d+)(ms|s|m|h|d)?$/.exec(spec.trim().toLowerCase());
-	if (!m) return null;
-	const n = parseInt(m[1], 10);
-	if (!Number.isFinite(n) || n <= 0) return null;
-	switch (m[2]) {
-		case "d":  return n * 86_400_000;
-		case "h":  return n * 3_600_000;
-		case "m":  return n * 60_000;
-		case "s":  return n * 1_000;
-		case "ms":
-		default:   return n;
-	}
-}
-
-function updateModeHint(form) {
-	const hint = document.getElementById("auctions-mode-hint");
-	if (!hint) return;
-	const want = (form.elements.namedItem("want")?.value ?? "").trim();
-	const recipient = (form.elements.namedItem("recipient")?.value ?? "").trim();
-	let label, cls;
-	if (!want && !recipient)     { label = "mode: open auction (any bid welcome)";        cls = "mode-open"; }
-	else if (!want && recipient) { label = "mode: gift — transfers instantly on post";    cls = "mode-gift"; }
-	else if (want && !recipient) { label = "mode: fixed-price (public)";                  cls = "mode-fixed"; }
-	else                          { label = "mode: directed sale (private)";              cls = "mode-directed"; }
-	hint.textContent = label;
-	hint.className = `auctions-mode-hint muted small ${cls}`;
 }
 
 function wireForm() {
@@ -434,17 +616,16 @@ function wireForm() {
 	if (!btn || !form || !cancelBtn) return;
 
 	btn.addEventListener("click", () => {
-		form.hidden = false;
-		btn.hidden = true;
-		updateModeHint(form);
-		form.querySelector('input[name="give"]')?.focus();
+		form.hidden = !form.hidden;
+		if (!form.hidden) {
+			updateModeHint(form);
+			form.querySelector('input[name="give"]')?.focus();
+		}
 	});
 	cancelBtn.addEventListener("click", () => {
 		form.hidden = true;
-		btn.hidden = false;
 		document.getElementById("auctions-form-error").textContent = "";
 	});
-	// Re-render the mode label whenever `want` or `recipient` changes.
 	for (const name of ["want", "recipient"]) {
 		const el = form.elements.namedItem(name);
 		el?.addEventListener("input", () => updateModeHint(form));
@@ -455,18 +636,47 @@ function wireForm() {
 	});
 }
 
+function wireChrome() {
+	// Tabs
+	for (const b of TABS.querySelectorAll(".auctions-tab")) {
+		b.addEventListener("click", () => {
+			TAB = b.getAttribute("data-tab");
+			for (const x of TABS.querySelectorAll(".auctions-tab")) x.classList.toggle("active", x === b);
+			lastRender = ""; refresh();
+		});
+	}
+	// Sort buttons
+	for (const b of SORTS.querySelectorAll(".auctions-sort")) {
+		b.addEventListener("click", () => {
+			SORT = b.getAttribute("data-sort");
+			for (const x of SORTS.querySelectorAll(".auctions-sort")) x.classList.toggle("active", x === b);
+			lastRender = ""; refresh();
+		});
+	}
+	// Search
+	SEARCH.addEventListener("input", (e) => {
+		SEARCH_Q = e.currentTarget.value;
+		lastRender = ""; refresh();
+	});
+}
+
+// ── Init ─────────────────────────────────────────────────────────
+
 export function initAuctionsPanel() {
-	AUCTIONS_PANEL  = document.getElementById("auctions");
-	AUCTIONS_LIST   = document.getElementById("auctions-list");
-	AUCTIONS_COUNT  = document.getElementById("auctions-count");
-	AUCTIONS_STATUS = document.getElementById("auctions-status");
-	if (!AUCTIONS_PANEL || !AUCTIONS_LIST) return;
+	PANEL  = document.getElementById("auctions");
+	LIST   = document.getElementById("auctions-list");
+	COUNT  = document.getElementById("auctions-count");
+	STATUS = document.getElementById("auctions-status");
+	FOOTER = document.getElementById("auctions-list-footer");
+	SEARCH = document.getElementById("auctions-search");
+	TABS   = document.getElementById("auctions-tabs");
+	SORTS  = document.getElementById("auctions-sorts");
+	if (!PANEL || !LIST) return;
 	loadWalletKeys().then(() => {
 		wireForm();
+		wireChrome();
 		refresh();
 		setInterval(refresh, POLL_MS);
-		// Periodically refresh wallet keys too — handles `wallet new`
-		// happening while astrolabe is open.
 		setInterval(loadWalletKeys, 30_000);
 	});
 }
