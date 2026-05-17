@@ -17,8 +17,6 @@ import express from "express";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { snapshot, getObjectDetail, getObjectChanges, getAgentConversation, getAgentContextRefs, getRoot, search, getWalletPubkeys } from "./reader.js";
-	import { getCoinOverview } from "./reader.js";
-	import { getGlobalCoinStatsViaDaemon } from "./coins.js";
 	import { getPrograms, DAEMON_URL, askAgent, recallBlock, injectObject, dispatchToDaemon } from "./daemon-client.js";
 	import { startWatcher, streamEvents, recentEvents } from "./events.js";
 const __filename = fileURLToPath(import.meta.url);
@@ -96,148 +94,8 @@ app.get("/api/agents/:id/context", (req, res) => {
 		});
 		res.json({ ok: true, agentId: id, status: "accepted" });
 	});
-// ── Auction house panel ─────────────────────────────────────────
-//
-// /auction is the autobase-backed P2P auction house. These endpoints
-// proxy to the daemon's program actor. Replaces the deleted /anchor
-// (PoST) endpoints. UI uses these to render the live auction list, show
-// per-node ledger health, and surface bids/settlements.
-
-app.get("/api/auction/status", async (_req, res) => {
-	try {
-		const status = await dispatchToDaemon("/auction", "status", []);
-		res.json({ ok: true, status });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.get("/api/auctions", async (_req, res) => {
-	try {
-		const list = await dispatchToDaemon("/auction", "list", []);
-		res.json({ ok: true, auctions: list ?? [] });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.get("/api/auctions/:id/bids", async (req, res) => {
-	try {
-		const bids = await dispatchToDaemon("/auction", "getBids", [req.params.id]);
-		res.json({ ok: true, bids: bids ?? [] });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/auctions/post", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/auction", "post", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/auctions/bid", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/auction", "bid", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/auctions/settle", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/auction", "settle", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/auctions/cancel", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/auction", "cancel", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-// ── Coins on the autobase ─────────────────────────────────────────
-
-app.get("/api/coins", async (_req, res) => {
-	console.log("[GET /api/coins] request");
-	try {
-		const tokens = await dispatchToDaemon("/coin", "list", []);
-		console.log(`[GET /api/coins] received ${tokens?.length ?? 0} tokens`);
-		// Filter malformed deploys (e.g. positional args passed instead of object shape).
-		const clean = (tokens ?? []).filter((t) => typeof t?.name === "string" && t.name.length > 0);
-		console.log(`[GET /api/coins] returning ${clean.length} clean tokens`);
-		res.json({ ok: true, tokens: clean });
-	} catch (err: any) {
-		console.error("[GET /api/coins] error:", err?.message ?? String(err), err?.stack);
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.get("/api/coins/:id/holders", async (req, res) => {
-	try {
-		const holders = await dispatchToDaemon("/coin", "holders", [{ tokenId: req.params.id }]);
-		res.json({ ok: true, holders: holders ?? [] });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-// ── Family (Figgies) — parent/kid users, mint, transfer ─────────────
-
-app.get("/api/family", async (_req, res) => {
-	try {
-		const users = await dispatchToDaemon("/family", "list", []);
-		res.json({ ok: true, users: users ?? [] });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.get("/api/family/me", async (_req, res) => {
-	try {
-		const me = await dispatchToDaemon("/family", "me", []);
-		res.json({ ok: true, ...((me as any) ?? {}) });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/family/register", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/family", "register", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/family/mint", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/family", "mint", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/family/transfer", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/family", "transfer", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
+// ── Auction house, coins, x402 payments, family-figgies routes
+// were stripped along with the /coin and /auction programs.
 
 // ── Network panel: peers discovered through the Hyperswarm directory ──
 //
@@ -519,20 +377,7 @@ app.get("/api/wallet", (_req, res) => {
 });
 
 
-	// Coin overview: all chain.coin.bucket objects with derived state
-	app.get("/api/coins", (_req, res) => {
-		res.json(getCoinOverview());
-	});
-	// Global coin stats from SQLite index (daemon)
-	app.get("/api/coins/stats", async (_req, res) => {
-		const stats = await getGlobalCoinStatsViaDaemon();
-		if (stats) {
-			res.json({ ok: true, source: "sqlite", stats });
-		} else {
-			res.status(503).json({ ok: false, error: "daemon offline — coin stats require daemon" });
-		}
-	});
-
+	// Coin overview routes were removed along with the /coin program.
 
 	// Program registry: auto-discover what programs glon is running.
 	app.get("/api/programs", async (_req, res) => {
@@ -631,38 +476,7 @@ app.get("/api/wallet", (_req, res) => {
 		}
 	});
 
-	// Payment modal: authorize + settle
-app.post("/api/pay/authorize", async (req, res) => {
-	const { tokenId, amount, recipient, validForSec, keyName } = req.body;
-	const dispatchUrl = process.env.GLON_DISPATCH_URL ?? DAEMON_URL;
-	try {
-		const r = await fetch(dispatchUrl, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ prefix: "/coin", action: "authorizePayment", args: [{ tokenId, amount, recipient, validForSec, keyName }] }),
-		});
-		const data = await r.json();
-		res.status(r.status).json(data);
-	} catch (err: any) {
-		res.status(500).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/pay/settle", async (req, res) => {
-	const { authorization, signature, keyName } = req.body;
-	const dispatchUrl = process.env.GLON_DISPATCH_URL ?? DAEMON_URL;
-	try {
-		const r = await fetch(dispatchUrl, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ prefix: "/coin", action: "settlePayment", args: [{ authorization, signature, keyName }] }),
-		});
-		const data = await r.json();
-		res.status(r.status).json(data);
-	} catch (err: any) {
-		res.status(500).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
+// /api/pay/authorize + /api/pay/settle (x402) were stripped along with /coin.
 // ── Error handler ──────────────────────────────────────────────────
 app.use((err: any, req: any, res: any, next: any) => {
 	console.error(`[ERROR] ${req.method} ${req.path}:`, err?.message ?? String(err));

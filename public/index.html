@@ -70,53 +70,6 @@
 		<h3>Tasks <span id="tasks-count" class="count"></span></h3>
 		<ul id="tasks-list" class="tasks-list"></ul>
 	</aside>
-	<aside id="crypto">
-		<button class="panel-collapse" data-panel="crypto" title="Collapse">─</button>
-		<h3>Coins <span id="crypto-count" class="count"></span></h3>
-		<ul id="crypto-list" class="coins-list"></ul>
-	</aside>
-
-	<!-- Family panel — Figgies users + parent-only mint/register forms.
-	     Lives alongside the legacy panels; data comes from /api/family/*. -->
-	<aside id="family" hidden>
-		<button class="panel-collapse" data-panel="family" title="Collapse">─</button>
-		<h3>Family <span id="family-count" class="count"></span></h3>
-		<div class="muted small" id="family-parent-note">Identity unknown.</div>
-		<ul id="family-list" class="family-list"></ul>
-		<form id="family-give-form" class="family-form hidden">
-			<h4>Give figgies (parent only)</h4>
-			<label class="family-field">
-				<span>to</span>
-				<input name="to" placeholder="kid1" required />
-			</label>
-			<label class="family-field">
-				<span>amount</span>
-				<input name="amount" type="number" min="1" placeholder="25" required />
-			</label>
-			<label class="family-field">
-				<span>memo</span>
-				<input name="memo" placeholder="did dishes" />
-			</label>
-			<button id="family-give-btn" type="submit">give</button>
-		</form>
-		<form id="family-register-form" class="family-form hidden">
-			<h4>Register new user (parent only)</h4>
-			<label class="family-field">
-				<span>name</span>
-				<input name="name" placeholder="kid2" required />
-			</label>
-			<label class="family-field">
-				<span>role</span>
-				<select name="role">
-					<option value="kid">kid</option>
-					<option value="parent">parent</option>
-				</select>
-			</label>
-			<button id="family-register-btn" type="submit">register</button>
-		</form>
-		<div id="family-error" class="family-error muted small"></div>
-	</aside>
-
 	<aside id="network">
 		<button class="panel-collapse" data-panel="network" title="Collapse">─</button>
 		<h3>Network <span id="network-count" class="count"></span></h3>
@@ -130,113 +83,6 @@
 		<div class="network-footer muted small" id="network-status"></div>
 	</aside>
 
-	<aside id="auctions" hidden>
-		<button class="panel-collapse" data-panel="auctions" title="Collapse">─</button>
-
-		<!-- Header -->
-		<div class="auctions-header">
-			<div class="auctions-title-row">
-				<h3>Listings <span id="auctions-count" class="count"></span></h3>
-				<button id="auctions-new-btn" class="auctions-create-btn" title="create a new listing" type="button">
-					<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1.5v9M1.5 6h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-					<span>Create Listing</span>
-				</button>
-			</div>
-			<div class="auctions-sub mono" id="auctions-status"></div>
-		</div>
-
-		<!-- Tabs -->
-		<div class="auctions-tabs" id="auctions-tabs">
-			<button class="auctions-tab active" data-tab="open">open <span class="tab-count mono" id="tab-count-open">0</span></button>
-			<button class="auctions-tab"        data-tab="mine">mine <span class="tab-count mono" id="tab-count-mine">0</span></button>
-			<button class="auctions-tab"        data-tab="bids">my bids <span class="tab-count mono" id="tab-count-bids">0</span></button>
-			<button class="auctions-tab"        data-tab="all">all <span class="tab-count mono" id="tab-count-all">0</span></button>
-		</div>
-
-		<!-- Search + sort -->
-		<div class="auctions-filter-bar">
-			<div class="auctions-search-wrap">
-				<svg width="12" height="12" viewBox="0 0 12 12" fill="none" class="auctions-search-icon">
-					<circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.2"/>
-					<path d="M7.8 7.8L10 10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-				</svg>
-				<input id="auctions-search" class="auctions-search mono" placeholder="filter offers · token · seller · id" />
-			</div>
-			<div class="auctions-sorts" id="auctions-sorts">
-				<button class="auctions-sort mono active" data-sort="hot">hot</button>
-				<button class="auctions-sort mono" data-sort="ending">ending</button>
-				<button class="auctions-sort mono" data-sort="new">new</button>
-				<button class="auctions-sort mono" data-sort="price">price</button>
-			</div>
-		</div>
-
-		<!-- New-listing form (hidden by default; toggled by header + button) -->
-		<form id="auctions-new-form" class="auctions-new-form" hidden>
-			<div class="auctions-field">
-				<span>give</span>
-				<div class="asset-picker" data-picker="give" data-mode="coins">
-					<div class="asset-picker-coins">
-						<select class="asset-token-select mono" data-role="token"></select>
-						<input class="asset-amount mono" data-role="amount" type="text" inputmode="numeric" placeholder="amount" />
-					</div>
-					<input class="asset-item mono" data-role="item" type="text" placeholder="item id (e.g. sword-001)" hidden />
-					<button type="button" class="asset-mode-toggle" data-picker-target="give">use unique item instead</button>
-				</div>
-			</div>
-			<div class="auctions-field">
-				<span>asking price (optional)</span>
-				<div class="asset-picker" data-picker="want" data-mode="none">
-					<div class="asset-picker-coins">
-						<select class="asset-token-select mono" data-role="token"></select>
-						<input class="asset-amount mono" data-role="amount" type="text" inputmode="numeric" placeholder="amount" />
-					</div>
-					<input class="asset-item mono" data-role="item" type="text" placeholder="item id" hidden />
-					<div class="asset-mode-buttons">
-						<button type="button" class="asset-mode-toggle" data-picker-target="want" data-want-mode="coins">accept coins</button>
-						<button type="button" class="asset-mode-toggle" data-picker-target="want" data-want-mode="item">accept item</button>
-						<button type="button" class="asset-mode-toggle" data-picker-target="want" data-want-mode="none">open offers</button>
-					</div>
-				</div>
-			</div>
-			<label class="auctions-field">
-				<span>directed to (optional)</span>
-				<input name="recipient" placeholder="64-hex chain pubkey — leave blank for public" />
-			</label>
-			<div class="auctions-mode-hint muted small" id="auctions-mode-hint">mode: open auction (any bid welcome)</div>
-			<label class="auctions-field">
-				<span>expires</span>
-				<input name="expires" value="24h" placeholder="30m / 1h / 2d" required />
-			</label>
-			<label class="auctions-field">
-				<span>signing key</span>
-				<input name="keyName" value="default" required />
-			</label>
-			<div class="auctions-form-actions">
-				<button type="submit" class="auctions-submit">post</button>
-				<button type="button" id="auctions-cancel-btn" class="auctions-cancel-btn">cancel</button>
-			</div>
-			<div class="auctions-form-error muted small" id="auctions-form-error"></div>
-		</form>
-
-		<!-- Column headers -->
-		<div class="auctions-col-headers mono">
-			<div class="col-give">give</div>
-			<div class="col-arrow"></div>
-			<div class="col-want">for</div>
-			<div class="col-bid">top bid</div>
-			<div class="col-trend">trend</div>
-			<div class="col-expires">expires</div>
-		</div>
-
-		<!-- Listings -->
-		<ul id="auctions-list" class="auctions-list-new"></ul>
-
-		<!-- Footer -->
-		<div class="auctions-list-footer mono small" id="auctions-list-footer"></div>
-	</aside>
-
-	<!-- Toast (shared, for bid + cancel feedback) -->
-	<div id="auctions-toast" class="auctions-toast" hidden></div>
 
 	<!-- Spell bar: WoW-style action bar at the bottom of the screen.
 	     Two rows of slots; each slot toggles a UI panel/window via
@@ -254,17 +100,8 @@
 			<button class="spell-slot" data-target="tasks"       data-key="3" type="button" title="Tasks">
 				<span class="spell-glyph">T</span><span class="spell-key">3</span>
 			</button>
-			<button class="spell-slot" data-target="crypto"      data-key="4" type="button" title="Coins">
-				<span class="spell-glyph">C</span><span class="spell-key">4</span>
-			</button>
-			<button class="spell-slot" data-target="family"     data-key="f" type="button" title="Family (Figgies)">
-				<span class="spell-glyph">F</span><span class="spell-key">F</span>
-			</button>
-			<button class="spell-slot" data-target="network"     data-key="5" type="button" title="Network">
-				<span class="spell-glyph">N</span><span class="spell-key">5</span>
-			</button>
-			<button class="spell-slot" data-target="auctions"    data-key="-" type="button" title="Auction house">
-				<span class="spell-glyph">A</span><span class="spell-key">A</span>
+			<button class="spell-slot" data-target="network"     data-key="4" type="button" title="Network">
+				<span class="spell-glyph">N</span><span class="spell-key">4</span>
 			</button>
 		</div>
 		<div class="spell-row">

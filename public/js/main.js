@@ -22,8 +22,6 @@ import { colorForType } from "./colors.js";
 
 	import { openAgentChat, initAgentChats } from "./chat.js";
 	import { initNetworkPanel } from "./network-panel.js";
-	import { initAuctionsPanel } from "./auctions-panel.js";
-	import { initFamilyPanel } from "./family-panel.js";
 	import { initPeerChatPanel, openPeerChat } from "./peer-chat-panel.js";
 	import { initPeerDetailPanel, openPeerDetail } from "./peer-detail-panel.js";
 	import { initSpellBar } from "./spell-bar.js";
@@ -110,8 +108,6 @@ const materials = {
 		contextAgentId = agents[0]?.id ?? null;
 		initAgentChats(agents);
 		initNetworkPanel();
-		initAuctionsPanel();
-		initFamilyPanel();
 		initPeerChatPanel();
 		initPeerDetailPanel();
 		initSpellBar();
