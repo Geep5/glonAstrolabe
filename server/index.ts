@@ -1,107 +1,38 @@
 /**
- * glonAstrolabe — HTTP server.
+ * glonAstrolabe — HTTP server for the Figgies UI.
  *
- * Routes:
- *   GET /api/state                       graph snapshot (objects + links + types + timeline)
- *   GET /api/objects/:id                 full detail + outbound/inbound links + raw fields
- *   GET /api/objects/:id/changes         the object's change DAG
- *   GET /api/agents/:id/conversation     classified blocks + registered tools
- *   GET /api/events                      live SSE stream of glon changes (tool calls, blocks, fields)
- *   GET /api/events/recent               last ≤200 events as JSON
- *   GET /api/meta                        host/data root info
- *   static /                             frontend from public/
- *   static /vendor/*                     mapped to node_modules/three/* for bare ES imports
+ * Proxies the browser's REST calls to the Figgies daemon's /dispatch
+ * endpoint and serves the static frontend from public/. Wallet info is
+ * read directly from ~/.figgies/wallet.json so the UI knows "who am I."
+ *
+ * The chat-related routes (/api/network, /api/peer-chat, /api/agents)
+ * are scaffold for the future — they currently return empty data so the
+ * UI panels can render without errors. They'll come alive when the
+ * Figgies daemon grows /directory, /peer-chat, and /agent programs.
  */
 
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { snapshot, getObjectDetail, getObjectChanges, getAgentConversation, getAgentContextRefs, getRoot, search, getWalletPubkeys } from "./reader.js";
-	import { getCoinOverview } from "./reader.js";
-	import { getGlobalCoinStatsViaDaemon } from "./coins.js";
-	import { getPrograms, DAEMON_URL, askAgent, recallBlock, injectObject, dispatchToDaemon } from "./daemon-client.js";
-	import { startWatcher, streamEvents, recentEvents } from "./events.js";
+import { readFileSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { dispatchToDaemon } from "./daemon-client.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, "..");
+const FIGGIES_ROOT = process.env.FIGGIES_ROOT ?? join(homedir(), ".figgies");
 
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "64kb" }));
 
-// ── Global logging middleware ────────────────────────────────────────
-app.use((req, res, next) => {
+app.use((req, _res, next) => {
 	console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
 	next();
 });
 
-// ── API ────────────────────────────────────────────────────────────
-
-app.get("/api/meta", (_req, res) => {
-	res.json({
-		root: getRoot(),
-		now: Date.now(),
-	});
-});
-
-app.get("/api/state", (_req, res) => {
-	res.json(snapshot());
-});
-app.get("/api/agents", (_req, res) => {
-	const s = snapshot();
-	const agents = (s.objects ?? []).filter((o: any) => o.typeKey === "agent");
-	res.json({ agents });
-});
-
-app.get("/api/objects/:id", (req, res) => {
-	const detail = getObjectDetail(req.params.id);
-	if (!detail) return res.status(404).json({ error: "not found" });
-	res.json(detail);
-});
-
-app.get("/api/objects/:id/changes", (req, res) => {
-	const changes = getObjectChanges(req.params.id);
-	if (!changes) return res.status(404).json({ error: "not found" });
-	res.json({ id: req.params.id, changes });
-});
-
-app.get("/api/agents/:id/conversation", (req, res) => {
-	const conv = getAgentConversation(req.params.id);
-	if (!conv) return res.status(404).json({ error: "agent not found" });
-	res.json(conv);
-});
-
-// Object ids referenced by any in-context block of this agent. Used by the
-// cosmos to render context-active balls with a persistent halo and to gate
-// the inject button.
-app.get("/api/agents/:id/context", (req, res) => {
-	const c = getAgentContextRefs(req.params.id);
-	if (!c) return res.status(404).json({ error: "agent not found" });
-	res.json({ agentId: req.params.id, agentName: c.agent.name, objectIds: c.objectIds });
-});
-
-	// Send a message to an agent. Queues the ask asynchronously and returns
-	// immediately so the browser doesn't hang on long-running tasks (10-30 min).
-	// The UI polls /conversation to pick up the response when it arrives.
-	app.post("/api/agents/:id/chat", async (req, res) => {
-		const { id } = req.params;
-		const { message } = req.body;
-		if (!message || typeof message !== "string") {
-			return res.status(400).json({ error: "message required" });
-		}
-		// Fire-and-forget: askAgent can take 10-30 min for complex tasks.
-		// We return immediately; the UI polls /conversation for the result.
-		askAgent(id, message).catch((err) => {
-			console.warn("[chat] background ask failed:", err?.message ?? String(err));
-		});
-		res.json({ ok: true, agentId: id, status: "accepted" });
-	});
-// ── Auction house panel ─────────────────────────────────────────
-//
-// /auction is the autobase-backed P2P auction house. These endpoints
-// proxy to the daemon's program actor. Replaces the deleted /anchor
-// (PoST) endpoints. UI uses these to render the live auction list, show
-// per-node ledger health, and surface bids/settlements.
+// ── Auction house (live, dispatched to Figgies daemon) ────────────
 
 app.get("/api/auction/status", async (_req, res) => {
 	try {
@@ -166,19 +97,13 @@ app.post("/api/auctions/cancel", async (req, res) => {
 	}
 });
 
-// ── Coins on the autobase ─────────────────────────────────────────
+// ── Coins / Figgies tokens ────────────────────────────────────────
 
 app.get("/api/coins", async (_req, res) => {
-	console.log("[GET /api/coins] request");
 	try {
 		const tokens = await dispatchToDaemon("/coin", "list", []);
-		console.log(`[GET /api/coins] received ${tokens?.length ?? 0} tokens`);
-		// Filter malformed deploys (e.g. positional args passed instead of object shape).
-		const clean = (tokens ?? []).filter((t) => typeof t?.name === "string" && t.name.length > 0);
-		console.log(`[GET /api/coins] returning ${clean.length} clean tokens`);
-		res.json({ ok: true, tokens: clean });
+		res.json({ ok: true, tokens: tokens ?? [] });
 	} catch (err: any) {
-		console.error("[GET /api/coins] error:", err?.message ?? String(err), err?.stack);
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
 });
@@ -192,460 +117,147 @@ app.get("/api/coins/:id/holders", async (req, res) => {
 	}
 });
 
-// ── Network panel: peers discovered through the Hyperswarm directory ──
-//
-// Mirrors the /directory program's actions. The UI calls these to render
-// the network panel, surface peer-request prompts, and send accept/decline.
+// ── Family (parents, kids, mint, transfer) ────────────────────────
 
-app.get("/api/network/status", async (_req, res) => {
-	console.log("[GET /api/network/status] request");
+app.get("/api/family", async (_req, res) => {
 	try {
-		const status = await dispatchToDaemon("/directory", "status", []);
-		console.log("[GET /api/network/status] success");
-		res.json({ ok: true, status });
+		const users = await dispatchToDaemon("/family", "list", []);
+		res.json({ ok: true, users: users ?? [] });
 	} catch (err: any) {
-		console.log("[GET /api/network/status] caught error (graceful fallback):", err?.message);
-		// Return empty status instead of crashing on missing /directory program
-		res.json({ ok: true, status: { ready: false, reason: "directory program not deployed" } });
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
 });
 
-app.get("/api/network/peers", async (_req, res) => {
-	console.log("[GET /api/network/peers] request");
+app.get("/api/family/me", async (_req, res) => {
 	try {
-		const peers = await dispatchToDaemon("/directory", "listDiscovered", []);
-		const peerList = await dispatchToDaemon("/peer", "list", []);
-		console.log(`[GET /api/network/peers] discovered ${peers?.length ?? 0} peers, ${peerList?.length ?? 0} in list`);
-		const trustMap = new Map();
-		for (const p of peerList || []) {
-			const key = (p.identity_pubkey || p.display_name || "").toLowerCase();
-			if (!key) continue;
-			const existing = trustMap.get(key);
-			// Only override if current is not already trusted.
-			if (!existing || existing !== "trusted") {
-				trustMap.set(key, p.trust_level);
-			}
-		}
-		const merged = (peers || []).map((p: any) => ({
-			...p,
-			trust_level: trustMap.get((p.identity_pubkey || "").toLowerCase())
-				|| trustMap.get((p.agent_name || "").toLowerCase())
-				|| (p.peer_object_id ? "trusted" : "discovered"),
-		}));
-		console.log(`[GET /api/network/peers] returning ${merged.length} merged peers`);
-		res.json({ ok: true, peers: merged });
+		const me = await dispatchToDaemon("/family", "me", []);
+		res.json({ ok: true, ...((me as any) ?? {}) });
 	} catch (err: any) {
-		console.log("[GET /api/network/peers] caught error (graceful fallback):", err?.message);
-		// Return empty peers list instead of crashing
-		res.json({ ok: true, peers: [] });
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
 });
 
-app.get("/api/network/requests", async (_req, res) => {
-	console.log("[GET /api/network/requests] request");
+app.post("/api/family/register", async (req, res) => {
 	try {
-		const requests = await dispatchToDaemon("/directory", "listRequests", []);
-		console.log(`[GET /api/network/requests] found ${requests?.length ?? 0} requests`);
-		res.json({ ok: true, requests });
-	} catch (err: any) {
-		console.log("[GET /api/network/requests] caught error (graceful fallback):", err?.message);
-		// Return empty requests list instead of crashing
-		res.json({ ok: true, requests: [] });
-	}
-});
-
-app.post("/api/network/peer", async (req, res) => {
-	// Body: { hyperswarm_pubkey?: string, identity_pubkey?: string, message?: string }
-	try {
-		const result = await dispatchToDaemon("/directory", "requestPeering", [req.body ?? {}]);
+		const result = await dispatchToDaemon("/family", "register", [req.body ?? {}]);
 		res.json({ ok: true, result });
 	} catch (err: any) {
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
 });
 
-app.post("/api/network/requests/:id/accept", async (req, res) => {
+app.post("/api/family/mint", async (req, res) => {
 	try {
-		const result = await dispatchToDaemon("/directory", "acceptRequest", [{ request_id: req.params.id }]);
+		const result = await dispatchToDaemon("/family", "mint", [req.body ?? {}]);
 		res.json({ ok: true, result });
 	} catch (err: any) {
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
 });
 
-app.post("/api/network/requests/:id/decline", async (req, res) => {
+app.post("/api/family/transfer", async (req, res) => {
 	try {
-		const result = await dispatchToDaemon("/directory", "declineRequest", [{ request_id: req.params.id }]);
+		const result = await dispatchToDaemon("/family", "transfer", [req.body ?? {}]);
 		res.json({ ok: true, result });
 	} catch (err: any) {
 		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
 	}
 });
 
-app.post("/api/network/announce", async (_req, res) => {
-	try {
-		const result = await dispatchToDaemon("/directory", "announce", []);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
+// ── Local wallet (which user this device represents) ──────────────
 
-// ── Peer-chat: agent-to-agent text messaging ────────────────────────
-//
-// Mirrors /peer-chat typed actions. The Network panel opens a chat panel
-// when the user clicks a `peered` row; the panel polls messages and posts
-// new ones through these endpoints.
-
-app.get("/api/peer-chat/conversations", async (_req, res) => {
-	console.log("[GET /api/peer-chat/conversations] request");
-	try {
-		const conversations = await dispatchToDaemon("/peer-chat", "listConversations", []);
-		console.log(`[GET /api/peer-chat/conversations] found ${conversations?.length ?? 0} conversations`);
-		res.json({ ok: true, conversations });
-	} catch (err: any) {
-		console.log("[GET /api/peer-chat/conversations] caught error (graceful fallback):", err?.message);
-		// Return empty conversations list instead of crashing
-		res.json({ ok: true, conversations: [] });
-	}
-});
-
-app.get("/api/peer-chat/messages", async (req, res) => {
-	// Query: ?identity_pubkey=...&since=...&limit=...
-	try {
-		const input: Record<string, unknown> = {};
-		if (typeof req.query.identity_pubkey === "string") input.identity_pubkey = req.query.identity_pubkey;
-		if (typeof req.query.peer_id === "string") input.peer_id = req.query.peer_id;
-		if (typeof req.query.since === "string") {
-			const n = Number(req.query.since);
-			if (Number.isFinite(n)) input.since = n;
-		}
-		if (typeof req.query.limit === "string") {
-			const n = Number(req.query.limit);
-			if (Number.isFinite(n)) input.limit = n;
-		}
-		const messages = await dispatchToDaemon("/peer-chat", "listMessages", [input]);
-		res.json({ ok: true, messages });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/peer-chat/send", async (req, res) => {
-	// Body: { identity_pubkey?: string, peer_id?: string, display_name?: string, text: string, in_reply_to?: string|null }
-	try {
-		const result = await dispatchToDaemon("/peer-chat", "send", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		// Distinguish trust-gate refusals (user-fixable) from swarm timeouts
-		// so the UI can show a useful message.
-		const msg = err?.message ?? String(err);
-		const status = /trust|peered|peer matches/i.test(msg) ? 400 : 503;
-		res.status(status).json({ ok: false, error: msg });
-	}
-});
-
-app.post("/api/peer-chat/mark-read", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/peer-chat", "markRead", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-// Inject an object into an agent's context: post a user_text via /agent ask
-// describing the object. Triggers one assistant turn but the reference stays
-// in context for every subsequent turn until the next compaction.
-	app.post("/api/agents/:agentId/inject/:objectId", async (req, res) => {
-		const { agentId, objectId } = req.params;
-		const detail = getObjectDetail(objectId);
-		if (!detail) return res.status(404).json({ error: "object not found" });
-		const summary = injectSummary(detail);
-		try {
-			const result = await injectObject(agentId, summary);
-			if (result === null) {
-				return res.status(502).json({ error: "glon daemon dispatch failed (actor unreachable)" });
-			}
-			res.json({ ok: true, agentId, objectId, summary });
-		} catch (err: any) {
-			res.status(503).json({ error: "could not reach glon daemon", detail: err?.message ?? String(err) });
-		}
-	});
-
-function injectSummary(detail: { object: { id: string; typeKey: string; name?: string }; rawFields: Record<string, unknown>; contentPreview?: string }): string {
-	const { object: obj, rawFields, contentPreview } = detail;
-	const lines: string[] = [];
-	const label = obj.name ? `"${obj.name}"` : obj.id.slice(0, 8);
-	lines.push(`(glonAstrolabe inject) Reference \u2014 the user wants you aware of this object:`);
-	lines.push(`  type: ${obj.typeKey}`);
-	lines.push(`  name: ${label}`);
-	lines.push(`  id:   ${obj.id}`);
-	const scalars = Object.entries(rawFields)
-		.filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
-		.slice(0, 6);
-	if (scalars.length > 0) {
-		lines.push(`  fields: ${scalars.map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 80)}`).join(", ")}`);
-	}
-	if (contentPreview) {
-		const preview = contentPreview.slice(0, 240).replace(/\s+/g, " ");
-		lines.push(`  content: ${preview}${contentPreview.length > 240 ? "\u2026" : ""}`);
-	}
-	lines.push(`Please acknowledge briefly so I know you got it; no further action needed unless I follow up.`);
-	return lines.join("\n");
-}
-
-// Free-text search across object metadata + agent block content. Used by the
-// frontend search box to surface compacted turns the user can recall.
-app.get("/api/search", (req, res) => {
-	const q = String(req.query.q ?? "");
-	const limit = Number(req.query.limit ?? 20);
-	res.json(search(q, Number.isFinite(limit) && limit > 0 ? limit : 20));
-});
-
-// Live event stream (SSE) of new glon changes — tool calls, messages,
-// field writes — as they land on disk. Replays the last ≤200 entries on
-// connect so a freshly-opened tab has context.
-app.get("/api/events", (req, res) => {
-	streamEvents(res);
-});
-
-app.get("/api/events/recent", (_req, res) => {
-	res.json({ events: recentEvents() });
-});
-
-	// Re-inject a compacted block into an agent's live context. Proxies to the
-	// glon daemon at $GLON_DISPATCH_URL (default port 6420), which
-	// owns the actor that mutates the DAG. Returns the new block id so the
-	// frontend can re-fetch the conversation and highlight it.
-	app.post("/api/agents/:id/recall/:blockId", async (req, res) => {
-		const { id, blockId } = req.params;
-		try {
-			const result = await recallBlock(id, blockId);
-			if (result === null) {
-				return res.status(502).json({ error: "glon daemon dispatch failed (actor unreachable)" });
-			}
-			res.json({ ok: true, result });
-		} catch (err: any) {
-			res.status(503).json({ error: "could not reach glon daemon", detail: err?.message ?? String(err) });
-		}
-	});
-
-
-	// Planet Forge — AI-assisted planet styling. Proxies to OpenAI.
-	app.post("/api/planet-forge", async (req, res) => {
-		const { messages, apiKey } = req.body;
-		if (!Array.isArray(messages) || messages.length === 0) {
-			return res.status(400).json({ error: "messages array required" });
-		}
-		const key = apiKey || process.env.OPENAI_API_KEY;
-		if (!key) {
-			return res.status(400).json({ error: "OpenAI API key required. Set OPENAI_API_KEY env var or pass apiKey in request." });
-		}
-		try {
-			const r = await fetch("https://api.openai.com/v1/chat/completions", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					"Authorization": `Bearer ${key}`,
-				},
-				body: JSON.stringify({
-					model: "gpt-4o",
-					messages,
-					temperature: 0.8,
-					max_tokens: 2048,
-				}),
-			});
-			if (!r.ok) {
-				const body = await r.text();
-				return res.status(502).json({ error: `OpenAI API error (${r.status})`, body });
-			}
-			const data = await r.json();
-			res.json(data);
-		} catch (err: any) {
-			res.status(503).json({ error: "could not reach OpenAI", detail: err?.message ?? String(err) });
-		}
-	});
-// Wallet pubkeys (local-only, read-only)
 app.get("/api/wallet", (_req, res) => {
-	res.json({ pubkeys: [...getWalletPubkeys()] });
-});
-
-
-	// Coin overview: all chain.coin.bucket objects with derived state
-	app.get("/api/coins", (_req, res) => {
-		res.json(getCoinOverview());
-	});
-	// Global coin stats from SQLite index (daemon)
-	app.get("/api/coins/stats", async (_req, res) => {
-		const stats = await getGlobalCoinStatsViaDaemon();
-		if (stats) {
-			res.json({ ok: true, source: "sqlite", stats });
-		} else {
-			res.status(503).json({ ok: false, error: "daemon offline — coin stats require daemon" });
-		}
-	});
-
-
-	// Program registry: auto-discover what programs glon is running.
-	app.get("/api/programs", async (_req, res) => {
-		const programs = await getPrograms();
-		if (programs) {
-			res.json({ ok: true, programs });
-		} else {
-			res.status(503).json({ ok: false, error: "daemon offline" });
-		}
-	});
-
-	// ── Tasks: merged daemon tasks + glon reminders ──────────────────
-
-	const DAEMON_TASKS_URL = DAEMON_URL.replace("/dispatch", "/tasks");
-	const GLON_DISPATCH_URL = process.env.GLON_DISPATCH_URL ?? DAEMON_URL;
-
-	app.get("/api/tasks", async (_req, res) => {
-		try {
-			const [daemonRes, snap] = await Promise.all([
-				fetch(DAEMON_TASKS_URL).then(r => r.ok ? r.json() : { tasks: [] }).catch(() => ({ tasks: [] })),
-				Promise.resolve(snapshot()),
-			]);
-			const daemonTasks = (daemonRes.tasks ?? []).map((t: any) => ({ ...t, source: "daemon" }));
-			const reminders = (snap.objects ?? [])
-				.filter((o) => o.typeKey === "reminder" && !o.deleted)
-				.map((o) => {
-					const sc = (o as any).rawFields ?? {};
-					const status = String(sc.status ?? "pending");
-					const fireAt = Number(sc.fire_at_ms ?? 0);
-					const now = Date.now();
-					return {
-						id: o.id,
-						name: String(sc.note ?? o.name ?? o.id),
-						type: "reminder",
-						enabled: status === "pending" || status === "sending",
-						status,
-						fireAt,
-						channel: String(sc.channel ?? "-"),
-						target: String(sc.target ?? "-"),
-						payload: sc.payload,
-						overdue: fireAt <= now && status === "pending",
-						source: "glon",
-					};
-				});
-			res.json({ ok: true, tasks: [...daemonTasks, ...reminders] });
-		} catch (err: any) {
-			res.status(500).json({ ok: false, error: err?.message ?? String(err) });
-		}
-	});
-
-	app.post("/api/tasks/reminders", async (req, res) => {
-		const { channel, target, fireAt, payload, note, createdBy } = req.body;
-		if (!channel || !fireAt || !payload) {
-			return res.status(400).json({ ok: false, error: "channel, fireAt, and payload are required" });
-		}
-		try {
-			const r = await fetch(GLON_DISPATCH_URL, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					prefix: "/remind",
-					action: "schedule",
-					args: [{ channel, target, fire_at: fireAt, payload, note, created_by: createdBy }],
-				}),
-			});
-			if (!r.ok) {
-				const body = await r.text();
-				return res.status(502).json({ ok: false, error: `daemon dispatch failed (${r.status})`, body });
-			}
-			const data = await r.json();
-			res.json({ ok: true, ...(data.result ?? data) });
-		} catch (err: any) {
-			res.status(503).json({ ok: false, error: "could not reach glon daemon", detail: err?.message ?? String(err) });
-		}
-	});
-
-	app.post("/api/tasks/reminders/:id/cancel", async (req, res) => {
-		try {
-			const r = await fetch(GLON_DISPATCH_URL, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					prefix: "/remind",
-					action: "cancel",
-					args: [req.params.id],
-				}),
-			});
-			if (!r.ok) {
-				const body = await r.text();
-				return res.status(502).json({ ok: false, error: `daemon dispatch failed (${r.status})`, body });
-			}
-			const data = await r.json();
-			res.json({ ok: true, ...(data.result ?? data) });
-		} catch (err: any) {
-			res.status(503).json({ ok: false, error: "could not reach glon daemon", detail: err?.message ?? String(err) });
-		}
-	});
-
-	// Payment modal: authorize + settle
-app.post("/api/pay/authorize", async (req, res) => {
-	const { tokenId, amount, recipient, validForSec, keyName } = req.body;
-	const dispatchUrl = process.env.GLON_DISPATCH_URL ?? DAEMON_URL;
+	const path = join(FIGGIES_ROOT, "wallet.json");
+	if (!existsSync(path)) return res.json({ pubkeys: [] });
 	try {
-		const r = await fetch(dispatchUrl, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ prefix: "/coin", action: "authorizePayment", args: [{ tokenId, amount, recipient, validForSec, keyName }] }),
-		});
-		const data = await r.json();
-		res.status(r.status).json(data);
-	} catch (err: any) {
-		res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+		const raw = JSON.parse(readFileSync(path, "utf-8"));
+		const keys = raw?.keys ?? {};
+		const pubkeys = Object.values(keys)
+			.map((entry: any) => entry?.pubkey)
+			.filter((k: any) => typeof k === "string");
+		res.json({ pubkeys });
+	} catch {
+		res.json({ pubkeys: [] });
 	}
 });
 
-app.post("/api/pay/settle", async (req, res) => {
-	const { authorization, signature, keyName } = req.body;
-	const dispatchUrl = process.env.GLON_DISPATCH_URL ?? DAEMON_URL;
-	try {
-		const r = await fetch(dispatchUrl, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ prefix: "/coin", action: "settlePayment", args: [{ authorization, signature, keyName }] }),
-		});
-		const data = await r.json();
-		res.status(r.status).json(data);
-	} catch (err: any) {
-		res.status(500).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-// ── Error handler ──────────────────────────────────────────────────
-app.use((err: any, req: any, res: any, next: any) => {
-	console.error(`[ERROR] ${req.method} ${req.path}:`, err?.message ?? String(err));
-	console.error(err?.stack);
-	res.status(500).json({ ok: false, error: err?.message ?? "Internal server error" });
+// ── Future chat infrastructure (stubs) ─────────────────────────────
+// These routes back the network, peer-chat, and agent-chat UI panels.
+// They return empty results until the Figgies daemon grows /directory,
+// /peer-chat, and /agent programs. The shape matches what the panels
+// expect, so they render gracefully without backend support.
+
+app.get("/api/network/status", (_req, res) => {
+	res.json({ ok: true, status: { hyperswarm_pubkey: "", peers_connected: 0, topics_joined: 0, queue_depth: 0, pending_requests: 0, discovered_count: 0, self: { identity_pubkey: "", hyperswarm_pubkey: "", agent_name: "", last_announce_at: 0, is_announcing: false, announce_interval_s: 0 } } });
 });
 
-// ── Static: three.js + frontend ────────────────────────────────────
-//
-// Serve three's ESM bundle from node_modules so the browser can resolve
-// bare `three` imports via an importmap (see public/index.html).
+app.get("/api/network/peers", (_req, res) => {
+	res.json({ ok: true, peers: [] });
+});
 
-	app.use("/vendor/three", express.static(join(ROOT, "node_modules", "three")));
-	app.use("/vendor/rapier", express.static(join(ROOT, "node_modules", "@dimforge", "rapier3d-compat")));
-	app.use(express.static(join(ROOT, "public"), { extensions: ["html"] }));
+app.get("/api/network/requests", (_req, res) => {
+	res.json({ ok: true, requests: [] });
+});
 
-// ── Bootstrap ──────────────────────────────────────────────────────
+app.post("/api/network/peer", (_req, res) => {
+	res.status(501).json({ ok: false, error: "peering not implemented yet" });
+});
+
+app.post("/api/network/requests/:id/accept", (_req, res) => {
+	res.status(501).json({ ok: false, error: "peering not implemented yet" });
+});
+
+app.post("/api/network/requests/:id/decline", (_req, res) => {
+	res.status(501).json({ ok: false, error: "peering not implemented yet" });
+});
+
+app.post("/api/network/announce", (_req, res) => {
+	res.status(501).json({ ok: false, error: "peering not implemented yet" });
+});
+
+app.get("/api/peer-chat/conversations", (_req, res) => {
+	res.json({ ok: true, conversations: [] });
+});
+
+app.get("/api/peer-chat/messages", (_req, res) => {
+	res.json({ ok: true, messages: [] });
+});
+
+app.post("/api/peer-chat/send", (_req, res) => {
+	res.status(501).json({ ok: false, error: "peer chat not implemented yet" });
+});
+
+app.post("/api/peer-chat/mark-read", (_req, res) => {
+	res.json({ ok: true });
+});
+
+app.get("/api/agents", (_req, res) => {
+	res.json({ agents: [] });
+});
+
+app.get("/api/agents/:id/conversation", (_req, res) => {
+	res.status(404).json({ error: "agents not implemented yet" });
+});
+
+app.get("/api/agents/:id/context", (_req, res) => {
+	res.status(404).json({ error: "agents not implemented yet" });
+});
+
+app.post("/api/agents/:id/chat", (_req, res) => {
+	res.status(501).json({ ok: false, error: "agents not implemented yet" });
+});
+
+// ── Static frontend ───────────────────────────────────────────────
+
+app.use(express.static(join(ROOT, "public")));
+
+// ── Bootstrap ─────────────────────────────────────────────────────
 
 const PORT = Number(process.env.PORT ?? 4173);
 const HOST = process.env.HOST ?? "127.0.0.1";
 
 app.listen(PORT, HOST, () => {
 	console.log(`glonAstrolabe → http://${HOST}:${PORT}`);
-	// The legacy DAG snapshot is best-effort — Figgies doesn't write change
-	// files, so the reader has nothing to load. Don't let startup fail on it.
-	try {
-		const snap = snapshot();
-		console.log(`  loaded: ${snap.objects.length} legacy objects, ${snap.links.length} links`);
-	} catch (err: any) {
-		console.log(`  legacy DAG snapshot skipped: ${err?.message ?? err}`);
-	}
-	try { startWatcher(); } catch (err: any) { console.log(`  events watcher skipped: ${err?.message ?? err}`); }
+	console.log(`  wallet source: ${FIGGIES_ROOT}/wallet.json`);
+	console.log(`  daemon dispatch: ${process.env.GLON_DISPATCH_PORT ?? 6430}`);
 });

@@ -3,93 +3,66 @@
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width,initial-scale=1" />
-	<title>glonAstrolabe</title>
-	<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪐</text></svg>" />
-	<link rel="stylesheet" href="./style.css?v=1" />
-
-	<script type="importmap">
-		{
-			"imports": {
-				"three": "/vendor/three/build/three.module.js",
-				"three/addons/": "/vendor/three/examples/jsm/",
-				"@dimforge/rapier3d-compat": "/vendor/rapier/rapier.es.js"
-			}
-		}
-	</script>
+	<title>Figgies</title>
+	<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪙</text></svg>" />
+	<link rel="stylesheet" href="./style.css?v=2" />
 </head>
 
 <body>
-	<canvas id="scene"></canvas>
-	<div id="search-results" class="search-results" hidden></div>
-
 	<header id="top">
 		<div class="brand">
 			<span class="mark"></span>
-			<span class="name">glon<span class="name-astrolabe">Astrolabe</span></span>
+			<span class="name">Figgies</span>
 			<span class="sep">·</span>
-			<span id="root-path" class="root">loading…</span>
-		</div>
-		<div class="top-right">
-			<input id="search" type="search" placeholder="search id / type / name…" />
+			<span id="me-name" class="root mono">…</span>
 		</div>
 	</header>
 
-	<aside id="legend">
-		<button class="panel-collapse" data-panel="legend" title="Collapse">─</button>
-		<h3>Types</h3>
-		<ul id="legend-list"></ul>
-		<h3>Lineage</h3>
-		<ul class="block-legend">
-			<li><i style="background:#ffc857"></i>subagent lineage (spawn_parent)</li>
-			<li><i style="background:#5eead4"></i>other object links</li>
-		</ul>
-		<h3>Activity</h3>
-		<div class="heat-strip" title="Balls heat up when their object receives a change. Brightness fades over ~30 seconds.">
-			<span class="heat-strip-bar"></span>
-			<span class="heat-strip-tick muted small">cold</span>
-			<span class="heat-strip-tick muted small heat-strip-tick-right">hot</span>
-		</div>
-		<h3>Controls</h3>
-		<ul class="controls">
-			<li><kbd>drag</kbd> orbit</li>
-			<li><kbd>scroll</kbd> zoom</li>
-			<li><kbd>right drag</kbd> pan</li>
-			<li><kbd>click</kbd> select</li>
-			<li><kbd>dbl-click</kbd> focus</li>
-			<li><kbd>esc</kbd> clear selection</li>
-		</ul>
+	<!-- ─── Family panel ───────────────────────────────────────────── -->
+	<aside id="family">
+		<button class="panel-collapse" data-panel="family" title="Collapse">─</button>
+		<h3>Family <span id="family-count" class="count"></span></h3>
+		<div class="muted small" id="family-parent-note">Identity unknown.</div>
+		<ul id="family-list" class="family-list"></ul>
+
+		<form id="family-give-form" class="family-form hidden">
+			<h4>Give figgies (parent only)</h4>
+			<label class="family-field">
+				<span>to</span>
+				<input name="to" placeholder="kid1" required />
+			</label>
+			<label class="family-field">
+				<span>amount</span>
+				<input name="amount" type="number" min="1" placeholder="25" required />
+			</label>
+			<label class="family-field">
+				<span>memo</span>
+				<input name="memo" placeholder="did dishes" />
+			</label>
+			<button id="family-give-btn" type="submit">give</button>
+		</form>
+
+		<form id="family-register-form" class="family-form hidden">
+			<h4>Register new user (parent only)</h4>
+			<label class="family-field">
+				<span>name</span>
+				<input name="name" placeholder="kid2" required />
+			</label>
+			<label class="family-field">
+				<span>role</span>
+				<select name="role">
+					<option value="kid">kid</option>
+					<option value="parent">parent</option>
+				</select>
+			</label>
+			<button id="family-register-btn" type="submit">register</button>
+		</form>
+
+		<div id="family-error" class="family-error muted small"></div>
 	</aside>
 
-	<aside id="jobs">
-		<button class="panel-collapse" data-panel="jobs" title="Collapse">─</button>
-		<h3>AI jobs <span id="jobs-count" class="count"></span></h3>
-		<ul id="jobs-list" class="jobs-list"></ul>
-	</aside>
-	<aside id="tasks">
-		<button class="panel-collapse" data-panel="tasks" title="Collapse">─</button>
-		<h3>Tasks <span id="tasks-count" class="count"></span></h3>
-		<ul id="tasks-list" class="tasks-list"></ul>
-	</aside>
-	<aside id="crypto">
-		<button class="panel-collapse" data-panel="crypto" title="Collapse">─</button>
-		<h3>Coins <span id="crypto-count" class="count"></span></h3>
-		<ul id="crypto-list" class="coins-list"></ul>
-	</aside>
-
-	<aside id="network">
-		<button class="panel-collapse" data-panel="network" title="Collapse">─</button>
-		<h3>Network <span id="network-count" class="count"></span></h3>
-		<!-- Visibility is driven by the CSS `:empty` rule — shown only when
-		     network-panel.js populates it with pending-incoming-request rows.
-		     Do NOT add the `hidden` attribute here; that overrides `:empty`
-		     and keeps the yellow strip invisible even when there are
-		     requests to accept. -->
-		<div id="network-requests" class="network-requests"></div>
-		<ul id="network-list" class="network-list"></ul>
-		<div class="network-footer muted small" id="network-status"></div>
-	</aside>
-
-	<aside id="auctions" hidden>
+	<!-- ─── Auction house panel (Listings) ─────────────────────────── -->
+	<aside id="auctions">
 		<button class="panel-collapse" data-panel="auctions" title="Collapse">─</button>
 
 		<!-- Header -->
@@ -129,7 +102,7 @@
 			</div>
 		</div>
 
-		<!-- New-listing form (hidden by default; toggled by header + button) -->
+		<!-- New-listing form (hidden by default) -->
 		<form id="auctions-new-form" class="auctions-new-form" hidden>
 			<div class="auctions-field">
 				<span>give</span>
@@ -138,8 +111,8 @@
 						<select class="asset-token-select mono" data-role="token"></select>
 						<input class="asset-amount mono" data-role="amount" type="text" inputmode="numeric" placeholder="amount" />
 					</div>
-					<input class="asset-item mono" data-role="item" type="text" placeholder="item id (e.g. sword-001)" hidden />
-					<button type="button" class="asset-mode-toggle" data-picker-target="give">use unique item instead</button>
+					<input class="asset-item mono" data-role="item" type="text" placeholder="what you're offering (e.g. 1 hour extra screen time)" hidden />
+					<button type="button" class="asset-mode-toggle" data-picker-target="give">use a non-coin item instead</button>
 				</div>
 			</div>
 			<div class="auctions-field">
@@ -159,7 +132,7 @@
 			</div>
 			<label class="auctions-field">
 				<span>directed to (optional)</span>
-				<input name="recipient" placeholder="64-hex chain pubkey — leave blank for public" />
+				<input name="recipient" placeholder="username — leave blank for everyone" />
 			</label>
 			<div class="auctions-mode-hint muted small" id="auctions-mode-hint">mode: open auction (any bid welcome)</div>
 			<label class="auctions-field">
@@ -197,69 +170,16 @@
 	<!-- Toast (shared, for bid + cancel feedback) -->
 	<div id="auctions-toast" class="auctions-toast" hidden></div>
 
-	<!-- Spell bar: WoW-style action bar at the bottom of the screen.
-	     Two rows of slots; each slot toggles a UI panel/window via
-	     the `hidden` attribute on its target (full hide, no peeking).
-	     Real icons + user-configurable keybinds live in a future
-	     settings pane. Each slot opts in via data-target. -->
-	<nav id="spell-bar" class="spell-bar" aria-label="UI window quick-launch">
-		<div class="spell-row">
-			<button class="spell-slot" data-target="legend"      data-key="1" type="button" title="Legend">
-				<span class="spell-glyph">L</span><span class="spell-key">1</span>
-			</button>
-			<button class="spell-slot" data-target="jobs"        data-key="2" type="button" title="AI jobs">
-				<span class="spell-glyph">J</span><span class="spell-key">2</span>
-			</button>
-			<button class="spell-slot" data-target="tasks"       data-key="3" type="button" title="Tasks">
-				<span class="spell-glyph">T</span><span class="spell-key">3</span>
-			</button>
-			<button class="spell-slot" data-target="crypto"      data-key="4" type="button" title="Coins">
-				<span class="spell-glyph">C</span><span class="spell-key">4</span>
-			</button>
-			<button class="spell-slot" data-target="network"     data-key="5" type="button" title="Network">
-				<span class="spell-glyph">N</span><span class="spell-key">5</span>
-			</button>
-			<button class="spell-slot" data-target="auctions"    data-key="-" type="button" title="Auction house">
-				<span class="spell-glyph">A</span><span class="spell-key">A</span>
-			</button>
-		</div>
-		<div class="spell-row">
-			<button class="spell-slot" data-target="peer-detail" data-key="6" type="button" title="Peer detail">
-				<span class="spell-glyph">P</span><span class="spell-key">6</span>
-			</button>
-			<button class="spell-slot" data-target="peer-chat"   data-key="7" type="button" title="Peer chat">
-				<span class="spell-glyph">⌨</span><span class="spell-key">7</span>
-			</button>
-			<button class="spell-slot" data-target="chat-dock"   data-key="8" type="button" title="AI chat (your agents)">
-				<span class="spell-glyph">💬</span><span class="spell-key">8</span>
-			</button>
-			<button class="spell-slot" data-target="inspector"   data-key="9" type="button" title="Inspector">
-				<span class="spell-glyph">I</span><span class="spell-key">9</span>
-			</button>
-			<button class="spell-slot" data-target="livelog"     data-key="0" type="button" title="Live log / combat log">
-				<span class="spell-glyph">⚡</span><span class="spell-key">0</span>
-			</button>
-		</div>
-	</nav>
-
-	<!-- Peer detail panel. Opens when you click a remote peer's sun.
-	     Lists the host (their principal/human) and any agents they've
-	     announced in their roster. Clicking any row spawns the
-	     peer-chat overlay targeted at that entity. Managed by
-	     peer-detail-panel.js. -->
-	<aside id="peer-detail" class="peer-detail" hidden>
-		<header class="peer-detail-header">
-			<span class="peer-detail-title" id="peer-detail-title">Peer</span>
-			<button class="peer-detail-close" id="peer-detail-close" title="Close">×</button>
-		</header>
-		<section class="peer-detail-body" id="peer-detail-body">
-			<!-- Populated dynamically. Sections: host, agents. -->
-		</section>
+	<!-- ─── Network panel (peer discovery, scaffold for future chat) ── -->
+	<aside id="network" hidden>
+		<button class="panel-collapse" data-panel="network" title="Collapse">─</button>
+		<h3>Network <span id="network-count" class="count"></span></h3>
+		<div id="network-requests" class="network-requests"></div>
+		<ul id="network-list" class="network-list"></ul>
+		<div class="network-footer muted small" id="network-status">Peer discovery coming with the next Figgies update.</div>
 	</aside>
 
-	<!-- Peer-chat overlay. Floats above the scene when a peered row is
-	     clicked in the Network panel. Open/close state and polling are
-	     managed by peer-chat-panel.js. -->
+	<!-- ─── Peer chat overlay (scaffold for H2H + H2A) ────────────── -->
 	<div id="peer-chat" class="peer-chat" hidden>
 		<header class="peer-chat-header">
 			<span class="peer-chat-title" id="peer-chat-title">Chat</span>
@@ -273,132 +193,27 @@
 		<div class="peer-chat-status muted small" id="peer-chat-status"></div>
 	</div>
 
-	<aside id="inspector">
-		<button class="panel-collapse" data-panel="inspector" title="Collapse">─</button>
-		<div class="inspector-collapsed-summary" id="inspector-summary">
-			<span class="type-badge" id="inspector-summary-badge" style="display:none"></span>
-			<span id="inspector-summary-title" class="inspector-summary-title">Inspector</span>
+	<!-- ─── Spell bar ─────────────────────────────────────────────── -->
+	<nav id="spell-bar" class="spell-bar" aria-label="Panel quick-launch">
+		<div class="spell-row">
+			<button class="spell-slot" data-target="family"   data-key="1" type="button" title="Family — balances + give figgies">
+				<span class="spell-glyph">F</span><span class="spell-key">1</span>
+			</button>
+			<button class="spell-slot" data-target="auctions" data-key="2" type="button" title="Auction house">
+				<span class="spell-glyph">A</span><span class="spell-key">2</span>
+			</button>
+			<button class="spell-slot" data-target="network"  data-key="3" type="button" title="Network (peer discovery — future)">
+				<span class="spell-glyph">N</span><span class="spell-key">3</span>
+			</button>
+			<button class="spell-slot" data-target="peer-chat" data-key="4" type="button" title="Peer chat (future)">
+				<span class="spell-glyph">⌨</span><span class="spell-key">4</span>
+			</button>
+			<button class="spell-slot" data-target="chat-dock" data-key="5" type="button" title="Agent chat (future)">
+				<span class="spell-glyph">💬</span><span class="spell-key">5</span>
+			</button>
 		</div>
-		<div id="inspector-empty" class="inspector-empty">
-			<h2>Select an object</h2>
-			<p>Click any ball to inspect it. The glowing ball is the agent. Activity heat lights up balls touched by recent changes.</p>
-			<div class="stats" id="stats"></div>
-		</div>
-		<div id="inspector-content" hidden>
-			<div class="type-badge" id="insp-type"></div>
-			<h2 id="insp-title"></h2>
-			<div id="insp-subtitle" class="muted"></div>
+	</nav>
 
-			<div class="insp-section" id="insp-agent-section" hidden>
-				<div id="insp-agent-stats" class="kv"></div>
-			</div>
-
-			<div class="insp-section" id="insp-scalars-section" hidden>
-				<h3>Fields</h3>
-				<div id="insp-scalars" class="kv"></div>
-			</div>
-
-			<div class="insp-section" id="insp-links-section" hidden>
-				<h3>Links</h3>
-				<div id="insp-links" class="link-list"></div>
-			</div>
-
-			<div id="insp-recall" class="insp-recall"></div>
-			<div class="insp-section" id="insp-content-section" hidden>
-				<h3 id="insp-content-title">Content</h3>
-				<pre id="insp-content" class="content"></pre>
-			</div>
-
-			<div class="insp-section">
-				<h3>Changes
-					<span class="count" id="insp-change-count"></span>
-				</h3>
-				<div id="insp-changes" class="change-dag"></div>
-			</div>
-
-			<div class="insp-section" id="insp-style-section" hidden>
-				<h3 class="collapsible">Aesthetic Node</h3>
-				<div id="insp-style-body" style="display:none">
-					<div class="forge-keyrow">
-						<input type="password" id="insp-forge-key" placeholder="OpenAI API key" />
-						<button id="insp-forge-key-save">Save</button>
-					</div>
-					<div class="forge-history" id="insp-forge-history"></div>
-					<div class="forge-status" id="insp-forge-status"></div>
-					<div class="forge-inputrow">
-						<input type="text" id="insp-forge-input" placeholder="Describe customization..." />
-						<button id="insp-forge-send">Send</button>
-						<button id="insp-forge-apply" disabled>Apply</button>
-						<button id="insp-forge-reset">Reset</button>
-					</div>
-				</div>
-			</div>
-		</div>
-	</aside>
-
-	<aside id="livelog" class="collapsed" aria-label="Live event log">
-		<header class="livelog-header">
-			<button class="panel-collapse" data-panel="livelog" title="Expand">▲</button>
-			<span class="livelog-dot"></span>
-			<span class="livelog-title">live</span>
-			<span id="livelog-status" class="livelog-status"></span>
-			<span id="livelog-count" class="livelog-count muted small">0</span>
-			<button id="livelog-clear" class="livelog-clear" title="Clear log">clear</button>
-		</header>
-		<div id="livelog-list" class="livelog-list"></div>
-	</aside>
-
-	<footer id="bottom">
-		<div class="status">
-			<span id="fps" class="muted"></span>
-			<span id="hover" class="muted"></span>
-		</div>
-		<div class="time-scrubber">
-			<span class="muted small">replay</span>
-			<input id="time-range" type="range" min="0" max="100" value="100" />
-			<span id="time-label" class="muted small">live</span>
-		</div>
-	</footer>
-
-	<div id="tooltip" class="tooltip" hidden></div>
-
-	<!-- Payment Modal -->
-	<div id="pay-modal" class="modal-overlay" hidden>
-		<div class="modal">
-			<div class="modal-header">
-				<h3>Pay with x402</h3>
-				<button class="modal-close" id="pay-modal-close">&times;</button>
-			</div>
-			<div class="modal-body">
-				<div class="pay-field">
-					<label>Amount</label>
-					<input type="text" id="pay-amount" value="10" readonly />
-				</div>
-				<div class="pay-field">
-					<label>Token ID</label>
-					<input type="text" id="pay-token" placeholder="paste token id" />
-				</div>
-				<div class="pay-field">
-					<label>Recipient</label>
-					<input type="text" id="pay-recipient" placeholder="pubkey hex" />
-				</div>
-				<div class="pay-field">
-					<label>Valid for (sec)</label>
-					<input type="number" id="pay-valid-for" value="60" />
-				</div>
-				<div class="pay-field">
-					<label>Wallet Key</label>
-					<input type="text" id="pay-key" value="default" />
-				</div>
-				<div id="pay-status" class="pay-status"></div>
-			</div>
-			<div class="modal-footer">
-				<button id="pay-cancel">Cancel</button>
-				<button id="pay-submit" class="primary">Sign & Pay</button>
-			</div>
-		</div>
-	</div>
-
-	<script type="module" src="./js/main.js?v=4"></script>
+	<script type="module" src="./js/main.js?v=2"></script>
 </body>
 </html>
