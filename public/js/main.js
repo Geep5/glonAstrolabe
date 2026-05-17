@@ -20,7 +20,6 @@ import { colorForType } from "./colors.js";
 	import { bindInspector, setLanding, showObject, clear as clearInspector, setContextState, showDaemonTask } from "./inspector.js";
 	import { setupLiveLog } from "./livelog.js";
 
-	import { openAgentChat, initAgentChats } from "./chat.js";
 	import { initNetworkPanel } from "./network-panel.js";
 	import { initPeerChatPanel, openPeerChat } from "./peer-chat-panel.js";
 	import { initPeerDetailPanel, openPeerDetail } from "./peer-detail-panel.js";
@@ -106,7 +105,7 @@ const materials = {
 		const agents = snapshot.objects.filter((o) => o.typeKey === "agent");
 		agents.sort((a, b) => (b.agentStats?.lastActivity ?? 0) - (a.agentStats?.lastActivity ?? 0));
 		contextAgentId = agents[0]?.id ?? null;
-		initAgentChats(agents);
+		// Agent chat lives inside the inspector now; no floating chat-dock.
 		initNetworkPanel();
 		initPeerChatPanel();
 		initPeerDetailPanel();
@@ -1209,6 +1208,9 @@ function onDoubleClick(e) {
 		highlightSelected();
 		if (focus) focusOnId(id);
 	}
+	// Exposed so other modules (network-panel) can drive selection without
+	// importing main.js directly.
+	window.glonSelectObject = select;
 
 	function focusOnId(id) {
 		const node = cosmosCtx.nodes.get(id);

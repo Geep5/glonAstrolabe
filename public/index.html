@@ -111,10 +111,7 @@
 			<button class="spell-slot" data-target="peer-chat"   data-key="7" type="button" title="Peer chat">
 				<span class="spell-glyph">⌨</span><span class="spell-key">7</span>
 			</button>
-			<button class="spell-slot" data-target="chat-dock"   data-key="8" type="button" title="AI chat (your agents)">
-				<span class="spell-glyph">💬</span><span class="spell-key">8</span>
-			</button>
-			<button class="spell-slot" data-target="inspector"   data-key="9" type="button" title="Inspector">
+			<button class="spell-slot" data-target="inspector"   data-key="8" type="button" title="Inspector (click an agent to chat)">
 				<span class="spell-glyph">I</span><span class="spell-key">9</span>
 			</button>
 			<button class="spell-slot" data-target="livelog"     data-key="0" type="button" title="Live log / combat log">
@@ -172,6 +169,28 @@
 
 			<div class="insp-section" id="insp-agent-section" hidden>
 				<div id="insp-agent-stats" class="kv"></div>
+
+				<!-- Tabs for the in-inspector agent chat surfaces. -->
+				<div class="insp-tabs" id="insp-agent-tabs">
+					<button class="insp-tab active" data-pane="chat" type="button">Chat</button>
+					<button class="insp-tab" data-pane="peers" type="button">Peer chats <span id="insp-peers-count" class="muted small"></span></button>
+				</div>
+
+				<!-- Chat pane: the LLM conversation. -->
+				<div class="insp-pane" id="insp-pane-chat">
+					<ul id="insp-chat-history" class="insp-chat-history"></ul>
+					<form id="insp-chat-form" class="insp-chat-form" autocomplete="off">
+						<input id="insp-chat-input" type="text" placeholder="Talk to this agent…" maxlength="8000" />
+						<button id="insp-chat-send" type="submit">Send</button>
+					</form>
+					<div id="insp-chat-status" class="insp-chat-status muted small"></div>
+				</div>
+
+				<!-- Peer chats pane: this agent's A2A conversations. -->
+				<div class="insp-pane" id="insp-pane-peers" hidden>
+					<ul id="insp-peers-list" class="insp-peers-list"></ul>
+					<div id="insp-peers-empty" class="muted small">No peer conversations yet. They'll appear here when this agent messages another peer.</div>
+				</div>
 			</div>
 
 			<div class="insp-section" id="insp-scalars-section" hidden>

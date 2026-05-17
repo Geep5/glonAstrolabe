@@ -5,7 +5,9 @@
 // "Accept", "Decline", and "Chat" buttons to the matching endpoints.
 
 import { openPeerChat } from "./peer-chat-panel.js";
-import { openAgentChat } from "./chat.js";
+// Agent chat moved into the inspector; the agent-chat action now just
+// navigates the cosmos selection so the inspector opens with that agent.
+// Imported lazily to avoid a hard dep on main.js.
 
 const POLL_MS = 5_000;
 const NETWORK_LIST = document.getElementById("network-list");
@@ -202,8 +204,9 @@ function bindClicks() {
 				});
 				btn.disabled = false; // chat button shouldn't lock out
 			} else if (action === "agent-chat") {
-				// Open the regular agent chat window for a local agent.
-				openAgentChat(btn.dataset.agentId, btn.dataset.name);
+				// Tell main.js's cosmos to select this agent. The inspector
+				// will open with the Chat tab populated.
+				try { window.glonSelectObject?.(btn.dataset.agentId); } catch {}
 				btn.disabled = false;
 			}
 		} catch (err) {

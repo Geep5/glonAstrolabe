@@ -36,6 +36,18 @@
 		forgeKey: document.getElementById("insp-forge-key"),
 		forgeKeySave: document.getElementById("insp-forge-key-save"),
 		stats: document.getElementById("stats"),
+		// Agent tab UI
+		agentTabs: document.getElementById("insp-agent-tabs"),
+		paneChat: document.getElementById("insp-pane-chat"),
+		panePeers: document.getElementById("insp-pane-peers"),
+		chatHistory: document.getElementById("insp-chat-history"),
+		chatForm: document.getElementById("insp-chat-form"),
+		chatInput: document.getElementById("insp-chat-input"),
+		chatSend: document.getElementById("insp-chat-send"),
+		chatStatus: document.getElementById("insp-chat-status"),
+		peersList: document.getElementById("insp-peers-list"),
+		peersEmpty: document.getElementById("insp-peers-empty"),
+		peersCount: document.getElementById("insp-peers-count"),
 	};
 
 	// Wire up Planet Forge once
@@ -142,10 +154,17 @@ export async function showObject(id) {
 		fetch(`/api/objects/${id}/changes`).then((r) => r.json()),
 	]);
 	render(detail, changes);
+	// If this is an agent, start the in-inspector chat + peer-chat polling.
+	if (detail?.object?.typeKey === "agent") {
+		startAgentChatBindings(detail.object);
+	} else {
+		stopAgentChatBindings();
+	}
 }
 
 export function clear() {
 	currentId = null;
+	stopAgentChatBindings();
 	els.empty.hidden = false;
 	els.content.hidden = true;
 }
@@ -387,4 +406,244 @@ function formatNumber(n) {
 
 function escapeHtml(s) {
 	return s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c]));
+}
+
+// ── In-inspector agent chat + peer-chats ──────────────────────────
+//
+// When an agent is selected, two tabs appear inside the inspector:
+//   Chat        — the LLM conversation (user_text / assistant_text / tool_use / tool_result)
+//   Peer chats  — A2A conversations this agent has over /peer-chat
+// Both poll every 2s while the inspector is showing this agent. The
+// floating chat-dock from chat.js is gone — chat lives here now.
+
+const CHAT_POLL_MS = 2_000;
+let chatPollHandle = null;
+let chatAgentId = null;
+let lastChatRender = "";
+let lastPeersRender = "";
+let chatTabsWired = false;
+let chatFormWired = false;
+let activePane = "chat";
+const expandedPeers = new Set(); // identity_pubkeys currently expanded
+
+function wireChatTabsOnce() {
+	if (chatTabsWired) return;
+	chatTabsWired = true;
+	if (!els.agentTabs) return;
+	for (const btn of els.agentTabs.querySelectorAll(".insp-tab")) {
+		btn.addEventListener("click", () => {
+			activePane = btn.dataset.pane;
+			for (const t of els.agentTabs.querySelectorAll(".insp-tab")) {
+				t.classList.toggle("active", t === btn);
+			}
+			els.paneChat.hidden = activePane !== "chat";
+			els.panePeers.hidden = activePane !== "peers";
+			// Force a fresh paint when switching tabs.
+			if (chatAgentId) {
+				lastChatRender = "";
+				lastPeersRender = "";
+				pollAgentChat();
+			}
+		});
+	}
+}
+
+function wireChatFormOnce() {
+	if (chatFormWired) return;
+	chatFormWired = true;
+	if (!els.chatForm) return;
+	els.chatForm.addEventListener("submit", async (e) => {
+		e.preventDefault();
+		if (!chatAgentId) return;
+		const text = els.chatInput.value.trim();
+		if (!text) return;
+		els.chatInput.value = "";
+		els.chatInput.disabled = true;
+		els.chatSend.disabled = true;
+		els.chatStatus.textContent = "sending…";
+		try {
+			const r = await fetch(`/api/agents/${encodeURIComponent(chatAgentId)}/chat`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ message: text }),
+			});
+			const data = await r.json().catch(() => null);
+			if (!r.ok || data?.ok === false) {
+				throw new Error(data?.error ?? `HTTP ${r.status}`);
+			}
+			els.chatStatus.textContent = "thinking…";
+		} catch (err) {
+			els.chatStatus.textContent = `failed: ${err?.message ?? String(err)}`;
+		} finally {
+			els.chatInput.disabled = false;
+			els.chatSend.disabled = false;
+			els.chatInput.focus();
+			// Force a refresh so the user's message lands immediately.
+			lastChatRender = "";
+			pollAgentChat();
+		}
+	});
+}
+
+export function startAgentChatBindings(agentObject) {
+	wireChatTabsOnce();
+	wireChatFormOnce();
+	const newAgentId = agentObject.id;
+	if (chatAgentId === newAgentId) return;
+	stopAgentChatBindings();
+	chatAgentId = newAgentId;
+	activePane = "chat";
+	for (const t of els.agentTabs.querySelectorAll(".insp-tab")) {
+		t.classList.toggle("active", t.dataset.pane === "chat");
+	}
+	els.paneChat.hidden = false;
+	els.panePeers.hidden = true;
+	lastChatRender = "";
+	lastPeersRender = "";
+	expandedPeers.clear();
+	els.chatHistory.innerHTML = "";
+	els.peersList.innerHTML = "";
+	els.chatStatus.textContent = "";
+	pollAgentChat();
+	chatPollHandle = setInterval(pollAgentChat, CHAT_POLL_MS);
+}
+
+export function stopAgentChatBindings() {
+	if (chatPollHandle) {
+		clearInterval(chatPollHandle);
+		chatPollHandle = null;
+	}
+	chatAgentId = null;
+}
+
+async function pollAgentChat() {
+	const id = chatAgentId;
+	if (!id) return;
+	// Only fetch what we're showing. Chat tab → conversation. Peers tab → peer-chat list.
+	if (activePane === "chat") {
+		await refreshChatPane(id);
+	} else {
+		await refreshPeersPane(id);
+	}
+	// Always refresh the peers count badge so it stays accurate from any tab.
+	refreshPeersCount().catch(() => {});
+}
+
+async function refreshChatPane(id) {
+	try {
+		const r = await fetch(`/api/agents/${encodeURIComponent(id)}/conversation`);
+		if (!r.ok) return;
+		const data = await r.json();
+		const blocks = Array.isArray(data?.blocks) ? data.blocks : [];
+		// Filter to user-visible block kinds; keep tool_use+tool_result as muted rows.
+		const visible = blocks.filter((b) =>
+			b.kind === "user_text" ||
+			b.kind === "assistant_text" ||
+			b.kind === "tool_use" ||
+			b.kind === "tool_result",
+		);
+		const html = visible.map((b) => {
+			if (b.kind === "user_text") {
+				return `<li class="user"><span class="role">you</span>${escapeHtml(b.text ?? "")}</li>`;
+			}
+			if (b.kind === "assistant_text") {
+				return `<li class="assistant"><span class="role">${escapeHtml(b.agentName ?? "agent")}</span>${escapeHtml(b.text ?? "")}</li>`;
+			}
+			if (b.kind === "tool_use") {
+				const name = b.toolName ?? "tool";
+				const preview = b.input ? `(${truncate(JSON.stringify(b.input), 100)})` : "";
+				return `<li class="tool"><span class="role">tool · ${escapeHtml(name)}</span>${escapeHtml(preview)}</li>`;
+			}
+			if (b.kind === "tool_result") {
+				const err = b.isError ? " · error" : "";
+				return `<li class="tool"><span class="role">result${err}</span>${escapeHtml(truncate(b.content ?? "", 200))}</li>`;
+			}
+			return "";
+		}).join("");
+		if (html !== lastChatRender) {
+			els.chatHistory.innerHTML = html || `<li class="tool" style="text-align:center"><span class="role">empty</span>Say hi to this agent.</li>`;
+			lastChatRender = html;
+			els.chatHistory.scrollTop = els.chatHistory.scrollHeight;
+		}
+		// Clear "thinking…" once a new assistant_text lands after a user_text.
+		if (visible.length > 0 && visible[visible.length - 1].kind === "assistant_text") {
+			els.chatStatus.textContent = "";
+		}
+	} catch { /* swallow polling errors */ }
+}
+
+async function refreshPeersPane(id) {
+	const convos = await fetchAgentConvos(id);
+	const html = convos.map((c) => {
+		const peerName = c.peer_display_name || shortId(c.peer_identity_pubkey ?? "");
+		const lastTs = c.last_message_at ? formatTime(c.last_message_at) : "";
+		const lastPreview = truncate(c.last_message_preview ?? "", 80);
+		const unread = c.unread_count ? ` <span class="muted small">· ${c.unread_count} unread</span>` : "";
+		const isOpen = expandedPeers.has(c.peer_identity_pubkey);
+		return `
+			<li>
+				<div class="insp-peer-row" data-peer="${escapeHtml(c.peer_identity_pubkey)}">
+					<div>
+						<div class="name">${escapeHtml(peerName)}${unread}</div>
+						<div class="last">${escapeHtml(lastPreview)}</div>
+					</div>
+					<div class="when">${escapeHtml(lastTs)}</div>
+				</div>
+				${isOpen ? `<div class="insp-peer-expand" data-expand="${escapeHtml(c.peer_identity_pubkey)}"></div>` : ""}
+			</li>
+		`;
+	}).join("");
+	if (html !== lastPeersRender) {
+		els.peersList.innerHTML = html;
+		lastPeersRender = html;
+		els.peersEmpty.hidden = convos.length > 0;
+		// Re-wire row clicks.
+		for (const row of els.peersList.querySelectorAll(".insp-peer-row")) {
+			row.addEventListener("click", () => {
+				const pk = row.dataset.peer;
+				if (expandedPeers.has(pk)) expandedPeers.delete(pk);
+				else expandedPeers.add(pk);
+				lastPeersRender = "";
+				refreshPeersPane(id);
+			});
+		}
+	}
+	// Populate any expanded rows with their message list.
+	for (const expandEl of els.peersList.querySelectorAll("[data-expand]")) {
+		const pk = expandEl.getAttribute("data-expand");
+		try {
+			const r = await fetch(`/api/peer-chat/messages?identity_pubkey=${encodeURIComponent(pk)}`);
+			const data = await r.json();
+			const msgs = Array.isArray(data?.messages) ? data.messages : [];
+			expandEl.innerHTML = msgs.map((m) => {
+				const dir = m.direction === "out" ? "out" : "in";
+				const body = typeof m.body === "string" ? m.body : JSON.stringify(m.body);
+				return `<div class="insp-peer-msg ${dir}"><span class="ts">${escapeHtml(formatTime(m.sent_at))}</span> ${escapeHtml(truncate(body, 400))}</div>`;
+			}).join("") || `<div class="muted small">No messages yet.</div>`;
+		} catch {
+			expandEl.innerHTML = `<div class="muted small">(messages unreachable)</div>`;
+		}
+	}
+}
+
+async function fetchAgentConvos(_agentId) {
+	// /peer-chat is a singleton actor; it returns all conversations the
+	// daemon knows about. When we go multi-agent-per-device we'll filter
+	// by sender here.
+	try {
+		const r = await fetch("/api/peer-chat/conversations");
+		const data = await r.json();
+		return Array.isArray(data?.conversations) ? data.conversations : [];
+	} catch { return []; }
+}
+
+async function refreshPeersCount() {
+	const convos = await fetchAgentConvos(chatAgentId);
+	if (els.peersCount) els.peersCount.textContent = convos.length > 0 ? `(${convos.length})` : "";
+}
+
+function truncate(s, n) {
+	if (!s) return "";
+	const str = String(s);
+	return str.length > n ? str.slice(0, n - 1) + "…" : str;
 }
