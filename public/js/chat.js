@@ -5,12 +5,7 @@
 	 * Position persists in localStorage per agent.
 	 */
 
-	// planet-styles was a cosmos-rendering helper; gone with the 3D scene.
-	// Stub keeps agent chat self-contained; reintroduce if planet rendering
-	// returns.
-	const parseRenderFromText = (_t) => null;
-	const setRender = (_a, _r) => {};
-	const applyToMesh = (_m, _r) => {};
+	import { parseRenderFromText, setRender, applyToMesh } from "./planet-styles.js";
 const DOCK = document.createElement("div");
 DOCK.id = "chat-dock";
 document.body.appendChild(DOCK);
