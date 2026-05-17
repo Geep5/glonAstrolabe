@@ -582,17 +582,24 @@ async function refreshPeersPane(id) {
 		const unread = c.unread_count ? ` <span class="muted small">· ${c.unread_count} unread</span>` : "";
 		const isOpen = expandedPeers.has(convId);
 		const status = c.status ?? "active";
-		const statusGlyph = status === "active" ? "●" : status === "done" ? "✓" : "⌛";
-		const statusClass = status === "active" ? "active" : status === "done" ? "done" : "expired";
+		const statusGlyph = status === "active" ? "●" : status === "done" ? "✓" : "⏸";
+		const statusClass = status === "active" ? "active" : status === "done" ? "done" : "paused";
 		const goal = c.goal ? truncate(c.goal, 80) : "";
 		const meta = [];
 		if (status === "active" && typeof c.hops_remaining === "number") meta.push(`${c.hops_remaining} hops left`);
 		if (c.message_count) meta.push(`${c.message_count} msg${c.message_count === 1 ? "" : "s"}`);
 		if (status === "done" && c.ended_reason) meta.push(`ended: ${truncate(c.ended_reason, 40)}`);
-		if (status === "auto-expired") meta.push("auto-expired");
+		if (status === "paused") meta.push(`paused at ${c.message_count} hops`);
+		if (typeof c.resumed_count === "number" && c.resumed_count > 0) meta.push(`resumed ${c.resumed_count}×`);
 		const metaStr = meta.join(" · ");
+		const pauseActions = status === "paused"
+			? `<div class="insp-peer-actions">
+				<button class="insp-peer-btn primary" data-act="resume" data-conv="${escapeHtml(convId)}">Continue</button>
+				<button class="insp-peer-btn ghost"   data-act="end"    data-conv="${escapeHtml(convId)}">End conversation</button>
+			   </div>`
+			: "";
 		return `
-			<li>
+			<li class="insp-peer-li ${statusClass}">
 				<div class="insp-peer-row" data-conv="${escapeHtml(convId)}">
 					<div>
 						<div class="name">
@@ -605,6 +612,7 @@ async function refreshPeersPane(id) {
 					</div>
 					<div class="when">${escapeHtml(lastTs)}</div>
 				</div>
+				${pauseActions}
 				${isOpen ? `<div class="insp-peer-expand" data-expand="${escapeHtml(convId)}"></div>` : ""}
 			</li>
 		`;
@@ -615,12 +623,43 @@ async function refreshPeersPane(id) {
 		els.peersEmpty.hidden = convos.length > 0;
 		// Re-wire row clicks.
 		for (const row of els.peersList.querySelectorAll(".insp-peer-row")) {
-			row.addEventListener("click", () => {
+			row.addEventListener("click", (e) => {
+				if (e.target?.closest?.(".insp-peer-btn")) return; // don't expand when clicking action buttons
 				const cid = row.dataset.conv;
 				if (expandedPeers.has(cid)) expandedPeers.delete(cid);
 				else expandedPeers.add(cid);
 				lastPeersRender = "";
 				refreshPeersPane(id);
+			});
+		}
+		// Pause-state action buttons (Continue / End)
+		for (const btn of els.peersList.querySelectorAll(".insp-peer-btn")) {
+			btn.addEventListener("click", async (e) => {
+				e.stopPropagation();
+				const cid = btn.dataset.conv;
+				const act = btn.dataset.act;
+				btn.disabled = true;
+				try {
+					if (act === "resume") {
+						await fetch("/api/peer-chat/resume", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ conversation_id: cid }),
+						});
+					} else if (act === "end") {
+						const reason = window.prompt("Reason for ending this conversation?", "user closed via inspector") ?? "user closed";
+						await fetch("/api/peer-chat/end", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ conversation_id: cid, reason }),
+						});
+					}
+					lastPeersRender = "";
+					await refreshPeersPane(id);
+				} catch (err) {
+					console.warn("[peer-chat]", act, "failed", err);
+					btn.disabled = false;
+				}
 			});
 		}
 	}

@@ -260,6 +260,26 @@ app.post("/api/peer-chat/mark-read", async (req, res) => {
 	}
 });
 
+app.post("/api/peer-chat/resume", async (req, res) => {
+	// Body: { conversation_id }
+	try {
+		const result = await dispatchToDaemon("/peer-chat", "resumeConversation", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
+app.post("/api/peer-chat/end", async (req, res) => {
+	// Body: { conversation_id, reason? }
+	try {
+		const result = await dispatchToDaemon("/peer-chat", "endConversation", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
 // Inject an object into an agent's context: post a user_text via /agent ask
 // describing the object. Triggers one assistant turn but the reference stays
 // in context for every subsequent turn until the next compaction.
