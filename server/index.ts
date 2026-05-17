@@ -216,9 +216,10 @@ app.get("/api/peer-chat/conversations", async (_req, res) => {
 });
 
 app.get("/api/peer-chat/messages", async (req, res) => {
-	// Query: ?identity_pubkey=...&since=...&limit=...
+	// Query: ?conversation_id=... | ?identity_pubkey=... | ?peer_id=... [&since=&limit=]
 	try {
 		const input: Record<string, unknown> = {};
+		if (typeof req.query.conversation_id === "string") input.conversation_id = req.query.conversation_id;
 		if (typeof req.query.identity_pubkey === "string") input.identity_pubkey = req.query.identity_pubkey;
 		if (typeof req.query.peer_id === "string") input.peer_id = req.query.peer_id;
 		if (typeof req.query.since === "string") {

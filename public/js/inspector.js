@@ -575,21 +575,37 @@ async function refreshChatPane(id) {
 async function refreshPeersPane(id) {
 	const convos = await fetchAgentConvos(id);
 	const html = convos.map((c) => {
+		const convId = c.conversation_id ?? c.peer_identity_pubkey;
 		const peerName = c.peer_display_name || shortId(c.peer_identity_pubkey ?? "");
 		const lastTs = c.last_message_at ? formatTime(c.last_message_at) : "";
 		const lastPreview = truncate(c.last_message_preview ?? "", 80);
 		const unread = c.unread_count ? ` <span class="muted small">· ${c.unread_count} unread</span>` : "";
-		const isOpen = expandedPeers.has(c.peer_identity_pubkey);
+		const isOpen = expandedPeers.has(convId);
+		const status = c.status ?? "active";
+		const statusGlyph = status === "active" ? "●" : status === "done" ? "✓" : "⌛";
+		const statusClass = status === "active" ? "active" : status === "done" ? "done" : "expired";
+		const goal = c.goal ? truncate(c.goal, 80) : "";
+		const meta = [];
+		if (status === "active" && typeof c.hops_remaining === "number") meta.push(`${c.hops_remaining} hops left`);
+		if (c.message_count) meta.push(`${c.message_count} msg${c.message_count === 1 ? "" : "s"}`);
+		if (status === "done" && c.ended_reason) meta.push(`ended: ${truncate(c.ended_reason, 40)}`);
+		if (status === "auto-expired") meta.push("auto-expired");
+		const metaStr = meta.join(" · ");
 		return `
 			<li>
-				<div class="insp-peer-row" data-peer="${escapeHtml(c.peer_identity_pubkey)}">
+				<div class="insp-peer-row" data-conv="${escapeHtml(convId)}">
 					<div>
-						<div class="name">${escapeHtml(peerName)}${unread}</div>
+						<div class="name">
+							<span class="insp-conv-status ${statusClass}" title="${escapeHtml(status)}">${statusGlyph}</span>
+							${escapeHtml(peerName)}${unread}
+						</div>
+						${goal ? `<div class="last"><span class="muted">goal:</span> ${escapeHtml(goal)}</div>` : ""}
 						<div class="last">${escapeHtml(lastPreview)}</div>
+						${metaStr ? `<div class="last muted small">${escapeHtml(metaStr)}</div>` : ""}
 					</div>
 					<div class="when">${escapeHtml(lastTs)}</div>
 				</div>
-				${isOpen ? `<div class="insp-peer-expand" data-expand="${escapeHtml(c.peer_identity_pubkey)}"></div>` : ""}
+				${isOpen ? `<div class="insp-peer-expand" data-expand="${escapeHtml(convId)}"></div>` : ""}
 			</li>
 		`;
 	}).join("");
@@ -600,9 +616,9 @@ async function refreshPeersPane(id) {
 		// Re-wire row clicks.
 		for (const row of els.peersList.querySelectorAll(".insp-peer-row")) {
 			row.addEventListener("click", () => {
-				const pk = row.dataset.peer;
-				if (expandedPeers.has(pk)) expandedPeers.delete(pk);
-				else expandedPeers.add(pk);
+				const cid = row.dataset.conv;
+				if (expandedPeers.has(cid)) expandedPeers.delete(cid);
+				else expandedPeers.add(cid);
 				lastPeersRender = "";
 				refreshPeersPane(id);
 			});
@@ -610,9 +626,9 @@ async function refreshPeersPane(id) {
 	}
 	// Populate any expanded rows with their message list.
 	for (const expandEl of els.peersList.querySelectorAll("[data-expand]")) {
-		const pk = expandEl.getAttribute("data-expand");
+		const cid = expandEl.getAttribute("data-expand");
 		try {
-			const r = await fetch(`/api/peer-chat/messages?identity_pubkey=${encodeURIComponent(pk)}`);
+			const r = await fetch(`/api/peer-chat/messages?conversation_id=${encodeURIComponent(cid)}`);
 			const data = await r.json();
 			const msgs = Array.isArray(data?.messages) ? data.messages : [];
 			expandEl.innerHTML = msgs.map((m) => {
@@ -627,19 +643,22 @@ async function refreshPeersPane(id) {
 }
 
 async function fetchAgentConvos(agentId) {
-	// /peer-chat singleton stores one conversation per "other side". When
-	// two agents on the same daemon chat, BOTH perspectives land in the
-	// singleton: a conversation keyed by the other agent's identity. To
-	// show only the current agent's view, drop conversations whose key
-	// IS this agent (those belong to the OTHER agent's perspective).
+	// v2 schema: conversations carry owner_agent_id (which local agent's
+	// perspective this entry is) and peer_identity_pubkey="local:<other>".
+	// Filter to entries OWNED by the current agent — drops the mirror that
+	// belongs to the other agent.
 	try {
 		const r = await fetch("/api/peer-chat/conversations");
 		const data = await r.json();
 		const all = Array.isArray(data?.conversations) ? data.conversations : [];
-		const ownLocal = agentId ? `local:${agentId}`.toLowerCase() : "";
-		return ownLocal
-			? all.filter((c) => (c.peer_identity_pubkey ?? "").toLowerCase() !== ownLocal)
-			: all;
+		if (!agentId) return all;
+		const ownLocal = `local:${agentId}`.toLowerCase();
+		return all.filter((c) => {
+			// Schema v2: prefer owner_agent_id when present.
+			if (c.owner_agent_id) return c.owner_agent_id === agentId;
+			// Fallback (legacy or cross-machine): drop conversations whose peer IS this agent.
+			return (c.peer_identity_pubkey ?? "").toLowerCase() !== ownLocal;
+		});
 	} catch { return []; }
 }
 
