@@ -35,13 +35,108 @@
 html, body {
 	margin: 0;
 	padding: 0;
-	height: 100%;
+	min-height: 100%;
 	font: 13px/1.4 'Inter', ui-sans-serif, -apple-system, "SF Pro Text", Helvetica, Arial, sans-serif;
 	color: var(--text);
-	background: var(--bg);
-	overflow: hidden;
+	background:
+		radial-gradient(1100px 700px at 18% 0%, oklch(40% 0.06 220 / 0.35), transparent 60%),
+		radial-gradient(900px 600px at 100% 100%, oklch(40% 0.08 175 / 0.25), transparent 55%),
+		var(--bg);
+	background-attachment: fixed;
 	-webkit-font-smoothing: antialiased;
 }
+
+/* ── Family panel ──────────────────────────────────────────────── */
+#family {
+	position: fixed;
+	top: 70px;
+	left: 24px;
+	width: 320px;
+	max-height: calc(100vh - 200px);
+	overflow-y: auto;
+	background: var(--bg-panel);
+	backdrop-filter: blur(20px);
+	-webkit-backdrop-filter: blur(20px);
+	border: 1px solid var(--stroke);
+	border-radius: 14px;
+	box-shadow: var(--shadow);
+	padding: 14px 16px 16px;
+	z-index: 10;
+	color: var(--text);
+}
+#family h3 {
+	margin: 0 0 6px 0;
+	font-size: 15px;
+	letter-spacing: -0.01em;
+	font-weight: 600;
+}
+#family h4 {
+	margin: 14px 0 8px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+}
+#family .family-list {
+	list-style: none;
+	padding: 0;
+	margin: 10px 0 0;
+	border-top: 1px solid var(--stroke);
+}
+#family .family-row {
+	display: grid;
+	grid-template-columns: 1fr auto auto;
+	gap: 10px;
+	align-items: baseline;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--stroke);
+}
+#family .family-row.is-me {
+	background: linear-gradient(90deg, var(--accent-soft), transparent);
+	margin: 0 -16px;
+	padding: 8px 16px;
+}
+#family .family-name { font-weight: 500; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+#family .family-role { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+#family .role-parent { color: var(--accent); }
+#family .role-kid    { color: var(--blue); }
+#family .family-balance {
+	font-family: 'JetBrains Mono', ui-monospace, monospace;
+	color: var(--text);
+	font-weight: 500;
+}
+#family .family-form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--stroke); }
+#family .family-form.hidden { display: none; }
+#family .family-field { display: grid; grid-template-columns: 80px 1fr; gap: 8px; align-items: center; margin-bottom: 8px; }
+#family .family-field span { color: var(--text-muted); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+#family .family-field input,
+#family .family-field select {
+	background: rgba(255,255,255,0.04);
+	border: 1px solid var(--stroke);
+	border-radius: 6px;
+	color: var(--text);
+	padding: 6px 10px;
+	font: inherit;
+}
+#family .family-field input:focus,
+#family .family-field select:focus {
+	outline: none;
+	border-color: var(--accent);
+	background: rgba(255,255,255,0.07);
+}
+#family button[type="submit"] {
+	width: 100%;
+	margin-top: 4px;
+	background: var(--accent-soft);
+	border-color: oklch(82% 0.13 175 / 0.35);
+	color: var(--text);
+	font-weight: 500;
+}
+#family button[type="submit"]:hover {
+	background: oklch(82% 0.13 175 / 0.22);
+}
+#family .family-error { margin-top: 10px; color: var(--err); min-height: 14px; }
 
 #scene {
 	position: fixed;
