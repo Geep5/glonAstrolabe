@@ -232,8 +232,26 @@ function render(detail, changesResponse) {
 		append(els.agentStats, row("turns", `${s.userTurns} user · ${s.assistantTurns} assistant`));
 		append(els.agentStats, row("tool calls", `${s.toolUses} (${s.toolResults} results)`));
 		append(els.agentStats, row("compactions", String(s.compactions)));
-		append(els.agentStats, row("effective tokens", `≈${formatNumber(s.effectiveTokens)}`));
 		append(els.agentStats, row("tools registered", String(s.toolCount)));
+
+		// Context fill bar: visual indicator of how close the agent is to
+		// compaction. Replaces the agent row that used to live in the
+		// (now-removed) AI jobs panel.
+		if (s.contextWindow > 0) {
+			const fill = Math.min(1, s.effectiveTokens / s.contextWindow);
+			const pct = Math.round(fill * 100);
+			const bar = document.createElement("div");
+			bar.className = "insp-context";
+			bar.innerHTML = `
+				<div class="insp-context-label">
+					<span class="k">context</span>
+					<span class="v mono small">${formatNumber(s.effectiveTokens)} / ${formatNumber(s.contextWindow)} · ${pct}%</span>
+				</div>
+				<div class="insp-context-bar"><div class="insp-context-bar-fill" style="width:${pct}%"></div></div>
+			`;
+			els.agentStats.appendChild(bar);
+		}
+
 		if (s.system) {
 			const r = row("system", "");
 			const v = r.querySelector(".v");

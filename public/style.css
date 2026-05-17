@@ -704,6 +704,37 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 .insp-peer-msg.out { background: var(--accent-soft); }
 .insp-peer-msg .ts { color: var(--text-dim); font-size: 10px; }
 
+.insp-context {
+	grid-column: 1 / -1;
+	margin-top: 10px;
+	margin-bottom: 4px;
+}
+.insp-context-label {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	margin-bottom: 4px;
+}
+.insp-context-label .k {
+	color: var(--text-muted);
+	font-size: 10px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+.insp-context-label .v { color: var(--text-muted); }
+.insp-context-bar {
+	height: 4px;
+	border-radius: 2px;
+	background: rgba(255,255,255,0.05);
+	overflow: hidden;
+}
+.insp-context-bar-fill {
+	height: 100%;
+	background: linear-gradient(90deg, var(--accent), var(--accent-2));
+	border-radius: 2px;
+	transition: width .3s ease;
+}
+
 .kv {
 	display: grid;
 	grid-template-columns: auto 1fr;

@@ -462,27 +462,23 @@ function setupThree() {
 			li.addEventListener("click", () => toggleTypeMute(type, li));
 			legend.appendChild(li);
 		}
-		renderJobs(snapshot.objects);
-		startJobsRefresh();
+		startStateRefresh();
 		startTasksRefresh();
 		startConversationsRefresh();
 	}
-// Re-render the jobs panel from a fresh /api/state every JOBS_POLL_MS.
-// Each row shows context-window fill (the bar that drives compaction),
-// turn count, and a live/idle dot driven by lastActivity.
-const JOBS_POLL_MS = 5000;
-let jobsTimer = 0;
-function startJobsRefresh() {
-	clearInterval(jobsTimer);
-	jobsTimer = setInterval(async () => {
+// Polls /api/state and re-renders any panels driven by the cosmos
+// snapshot — currently just the top-bar agents widget. Drops in
+// new agents within STATE_POLL_MS of bootstrap.
+const STATE_POLL_MS = 5000;
+let stateTimer = 0;
+function startStateRefresh() {
+	clearInterval(stateTimer);
+	stateTimer = setInterval(async () => {
 		try {
 			const s = await fetch("/api/state").then((r) => r.json());
-			renderJobs(s.objects);
 			renderAgentsWidget(s.objects.filter((o) => o.typeKey === "agent"));
 		} catch { /* keep last paint on transient error */ }
-	}, JOBS_POLL_MS);
-	// Smooth 1Hz tick to update reminder countdown bars between polls.
-	setInterval(tickReminderBars, 1000);
+	}, STATE_POLL_MS);
 }
 
 // ── Agents widget (top-bar chip list) ─────────────────────────────
@@ -741,160 +737,6 @@ function startAgentsWidgetRefresh() {
 			}
 		});
 	}
-function tickReminderBars() {
-	const now = Date.now();
-	document.querySelectorAll("#jobs-list .job-row.reminder").forEach((row) => {
-		const fire = Number(row.dataset.fire ?? 0);
-		const created = Number(row.dataset.created ?? 0);
-		if (!fire) return;
-		const total = Math.max(1, fire - created);
-		const elapsed = Math.max(0, Math.min(total, now - created));
-		const pct = Math.round((elapsed / total) * 100);
-		const fillEl = row.querySelector(".job-bar-fill");
-		if (fillEl) fillEl.style.width = pct + "%";
-		// Refresh the meta countdown only if the row is pending; static rows don't need updates.
-		if (row.classList.contains("pending")) {
-			const metaEl = row.querySelector(".job-meta");
-			if (metaEl) metaEl.textContent = `reminder \u00b7 fires in ${formatDuration(fire - now)}`;
-		}
-	});
-}
-
-// AI jobs = every running agent + every reminder. Reminders carry a
-// fire_at_ms field so we can render a live countdown; agents render a
-// context-window fill bar.
-function renderJobs(objects) {
-	const host = document.getElementById("jobs-list");
-	const countEl = document.getElementById("jobs-count");
-	if (!host) return;
-	const agents = (objects ?? []).filter((o) => o.typeKey === "agent" && o.agentStats);
-	// Reminders: pending or fired/failed/cancelled within the last 24h. Older
-	// ones are noise (e.g. a long-dead cancelled scheduler from months ago).
-	const now = Date.now();
-	const REMINDER_HISTORY_MS = 24 * 3600_000;
-	const reminders = (objects ?? []).filter((o) => {
-		if (o.typeKey !== "reminder" || o.deleted) return false;
-		const sc = o.scalars ?? {};
-		const fire = Number(sc.fire_at_ms ?? 0);
-		const status = String(sc.status ?? "pending");
-		const pending = fire > now && status !== "sent" && status !== "cancelled" && status !== "failed";
-		return pending || (now - fire) <= REMINDER_HISTORY_MS;
-	});
-	jobsRows = [
-		...agents.map((a) => ({ kind: "agent", obj: a })),
-		...reminders.map((r) => ({ kind: "reminder", obj: r })),
-	];
-	for (const row of jobsRows) row.key = jobsSortKey(row, now);
-	// Two-stage sort: tier first (pending \u2192 agents \u2192 past), then within tier
-	// by `sub` ascending. `sub` is `fire` for pending reminders so the next-
-	// to-trigger lands at the very top; for agents and past reminders it's
-	// negated so the most-recently-active surfaces above older ones.
-	jobsRows.sort((x, y) => (x.key.tier - y.key.tier) || (x.key.sub - y.key.sub));
-	countEl.textContent = String(jobsRows.length);
-	host.innerHTML = "";
-	for (const row of jobsRows) {
-		const el = row.kind === "agent" ? renderAgentRow(row.obj) : renderReminderRow(row.obj);
-		host.appendChild(el);
-	}
-	if (jobsRows.length === 0) {
-		const li = document.createElement("li");
-		li.className = "job-row empty";
-		li.textContent = "no agents or reminders";
-		host.appendChild(li);
-	}
-}
-
-// Cached so the 1Hz tick can recompute countdown bars without re-fetching.
-let jobsRows = [];
-
-function renderAgentRow(a) {
-	const s = a.agentStats;
-	const now = Date.now();
-	const fill = Math.min(1, s.contextWindow > 0 ? s.effectiveTokens / s.contextWindow : 0);
-	const pct = Math.round(fill * 100);
-	const ageMs = now - (s.lastActivity ?? 0);
-	const active = ageMs < 30_000;
-	const li = document.createElement("li");
-	li.className = "job-row" + (active ? " active" : "");
-	li.title = `${s.userTurns} user / ${s.assistantTurns} assistant turns; ${s.toolUses} tool calls; ${formatNumber(s.effectiveTokens)} of ${formatNumber(s.contextWindow)} tokens (${pct}%)`;
-	li.innerHTML = `
-		<span class="job-dot"></span>
-		<span class="job-name">${escapeHtml(a.name ?? shortId(a.id))}</span>
-		<span class="job-meta">agent \u00b7 ${s.userTurns}u / ${s.assistantTurns}a \u00b7 ${formatTimeAgo(ageMs)} \u00b7 ${formatNumber(s.effectiveTokens)} / ${formatNumber(s.contextWindow)} (${pct}%)</span>
-		<div class="job-bar"><div class="job-bar-fill" style="width:${pct}%"></div></div>
-	`;
-	li.addEventListener("click", () => select(a.id, { focus: true }));
-	return li;
-}
-
-// Reminder lifecycle classes the row visually:
-//   pending  (fire_at in future, status not sent/cancelled/failed)
-//   live     (fire_at \u2264 now but not yet status=sent: actively firing)
-//   sent / failed / cancelled = static, color-coded.
-//
-// Sort tiers, top to bottom:
-//   0  pending reminders          \u2014 ascending fire_at_ms (next first)
-//   1  agents                      \u2014 descending lastActivity
-//   2  past/cancelled reminders    \u2014 descending fire_at_ms
-// Within tier 0 the row at the very top is the next thing about to trigger.
-function jobsSortKey(row, now) {
-	if (row.kind === "reminder") {
-		const sc = row.obj.scalars ?? {};
-		const fire = Number(sc.fire_at_ms ?? 0);
-		const status = String(sc.status ?? "pending");
-		const pending = fire > now && status !== "sent" && status !== "cancelled" && status !== "failed";
-		if (pending) return { tier: 0, sub: fire };
-		return { tier: 2, sub: -fire };
-	}
-	const last = row.obj.agentStats?.lastActivity ?? 0;
-	return { tier: 1, sub: -last };
-}
-
-function renderReminderRow(r) {
-	const sc = r.scalars ?? {};
-	const now = Date.now();
-	const fire = Number(sc.fire_at_ms ?? 0);
-	const created = Number(sc.created_at_ms ?? r.createdAt ?? 0);
-	const status = String(sc.status ?? "pending");
-	const note = String(sc.note ?? sc.channel ?? r.name ?? shortId(r.id));
-	const prompt = extractReminderPrompt(sc.payload);
-	// Title: prefer the actual task prompt over the category label \u2014 the user
-	// has six "Auth-driven job scheduler" reminders that only differ in payload.
-	const title = prompt || note;
-	const pending = fire > now && status !== "sent" && status !== "cancelled" && status !== "failed";
-	const total = Math.max(1, fire - created);
-	const elapsed = Math.max(0, Math.min(total, now - created));
-	const pct = Math.round((elapsed / total) * 100);
-	let meta;
-	if (pending) {
-		meta = `reminder \u00b7 fires in ${formatDuration(fire - now)}`;
-	} else if (status === "sent") {
-		meta = `reminder \u00b7 fired ${formatTimeAgo(now - fire)}`;
-	} else {
-		meta = `reminder \u00b7 ${status} ${formatTimeAgo(now - fire)}`;
-	}
-	const li = document.createElement("li");
-	li.className = `job-row reminder status-${status}` + (pending ? " pending" : "");
-	const tooltipLines = [
-		note && note !== title ? `${note}` : null,
-		prompt && prompt !== title ? `prompt: ${prompt}` : null,
-		`status: ${status}`,
-		`fire_at: ${new Date(fire).toLocaleString()}`,
-		`created: ${new Date(created).toLocaleString()}`,
-	].filter(Boolean);
-	li.title = tooltipLines.join("\n");
-	li.dataset.kind = "reminder";
-	li.dataset.fire = String(fire);
-	li.dataset.created = String(created);
-	li.innerHTML = `
-		<span class="job-dot"></span>
-		<span class="job-name">${escapeHtml(title)}</span>
-		<span class="job-meta">${meta}</span>
-		<div class="job-bar"><div class="job-bar-fill" style="width:${pct}%"></div></div>
-	`;
-	li.addEventListener("click", () => select(r.id, { focus: true }));
-	return li;
-}
 
 // Reminders carry their actual task description in `payload`, which is a
 // JSON string whose value is itself a JSON object \u2014 typically `{"prompt":"..."}`.
