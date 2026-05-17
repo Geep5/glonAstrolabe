@@ -4,7 +4,9 @@
 // renders to #network-list and #network-requests, wires "Peer with",
 // "Accept", "Decline", and "Chat" buttons to the matching endpoints.
 
-import { openPeerChat } from "./peer-chat-panel.js";
+// peer-chat overlay was folded into the inspector; the "chat" action on
+// network rows now selects the peer's object so its inspector opens with
+// the Peer chats tab populated.
 // Agent chat moved into the inspector; the agent-chat action now just
 // navigates the cosmos selection so the inspector opens with that agent.
 // Imported lazily to avoid a hard dep on main.js.
@@ -197,12 +199,10 @@ function bindClicks() {
 				await postAction(`/api/network/requests/${encodeURIComponent(btn.dataset.id)}/decline`);
 				setTimeout(refresh, 250);
 			} else if (action === "chat") {
-				// Open the peer-chat overlay for this trusted peer.
-				openPeerChat({
-					identity_pubkey: btn.dataset.identity,
-					display_name: btn.dataset.name,
-				});
-				btn.disabled = false; // chat button shouldn't lock out
+				// Open this peer in the inspector; user can switch to the
+				// Peer chats tab to see / continue their conversation.
+				try { window.glonSelectObject?.(btn.dataset.peerId); } catch {}
+				btn.disabled = false;
 			} else if (action === "agent-chat") {
 				// Tell main.js's cosmos to select this agent. The inspector
 				// will open with the Chat tab populated.

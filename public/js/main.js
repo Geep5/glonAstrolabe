@@ -21,8 +21,6 @@ import { colorForType } from "./colors.js";
 	import { setupLiveLog } from "./livelog.js";
 
 	import { initNetworkPanel } from "./network-panel.js";
-	import { initPeerChatPanel, openPeerChat } from "./peer-chat-panel.js";
-	import { initPeerDetailPanel, openPeerDetail } from "./peer-detail-panel.js";
 	import { initSpellBar } from "./spell-bar.js";
 	import { getRender, setRender, clearRender, applyToMesh, updateOverlays } from "./planet-styles.js";
 	import { initPhysics } from "./physics.js";
@@ -107,8 +105,8 @@ const materials = {
 		contextAgentId = agents[0]?.id ?? null;
 		// Agent chat lives inside the inspector now; no floating chat-dock.
 		initNetworkPanel();
-		initPeerChatPanel();
-		initPeerDetailPanel();
+		// Peer chat + peer detail floating panels were folded into the
+		// inspector. Their imports + inits are gone.
 		initSpellBar();
 		setupThree();
 		buildScenes();
@@ -976,8 +974,6 @@ function bindUI() {
 		makeDraggable("inspector",   null, "glonAstrolabe.panelPos.inspector");
 		makeDraggable("livelog",     null, "glonAstrolabe.panelPos.livelog");
 		makeDraggable("network",     null, "glonAstrolabe.panelPos.network");
-		makeDraggable("peer-detail", null, "glonAstrolabe.panelPos.peer-detail");
-		makeDraggable("peer-chat",   null, "glonAstrolabe.panelPos.peer-chat");
 		// Resizable panels — bottom-right corner handle. Sizes persist to
 		// localStorage under panelSize.<id>.
 		makeResizable("legend",      "glonAstrolabe.panelSize.legend");
@@ -986,8 +982,6 @@ function bindUI() {
 		makeResizable("inspector",   "glonAstrolabe.panelSize.inspector");
 		makeResizable("livelog",     "glonAstrolabe.panelSize.livelog");
 		makeResizable("network",     "glonAstrolabe.panelSize.network");
-		makeResizable("peer-detail", "glonAstrolabe.panelSize.peer-detail");
-		makeResizable("peer-chat",   "glonAstrolabe.panelSize.peer-chat");
 
 		// Collapsible panels — `.collapsed` class is the partial-collapse
 		// state (header visible, body hidden) driven by the in-panel
@@ -1149,33 +1143,13 @@ function onClick(e) {
 	if (!first) return;
 	const ud = first.userData;
 	if (ud.kind === "object") {
-		// If this object is a network peer (a remote glon's sun or
-		// moon), open the peer-detail panel: shows the host + their
-		// agent roster, each clickable to spawn a chat. Otherwise
-		// fall through to normal inspector selection.
-		const obj = ud.obj;
-		const idp = obj?.scalars?.identity_pubkey;
-		const hsp = obj?.scalars?.hyperswarm_pubkey;
-		const isNetworkPeerObj = ud.typeKey === "peer"
-			&& typeof idp === "string" && idp.length === 64
-			&& typeof hsp === "string" && hsp.length === 64;
-		if (isNetworkPeerObj) {
-			openPeerDetail({
-				identity_pubkey: idp,
-				display_name: obj?.scalars?.display_name,
-			});
-			return;
-		}
+		// All node clicks open the inspector — including network peers
+		// (which used to fan out into a floating peer-detail panel).
 		select(ud.id);
 	} else if (ud.kind === "conversation") {
-		// Click on a conversation node opens the peer-chat panel for
-		// that peer. v1 has at most one conversation per peer; once we
-		// add per-(agent-pair) conversation_ids, this will dispatch to
-		// the specific conversation.
-		openPeerChat({
-			identity_pubkey: ud.peer_identity_pubkey,
-			display_name: ud.peer_display_name,
-		});
+		// Conversation spheres represent a peer-chat thread. Open the
+		// inspector for the peer; the Peer chats tab shows the thread.
+		if (ud.peer_object_id) select(ud.peer_object_id);
 	}
 }
 

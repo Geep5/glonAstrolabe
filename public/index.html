@@ -105,51 +105,14 @@
 			</button>
 		</div>
 		<div class="spell-row">
-			<button class="spell-slot" data-target="peer-detail" data-key="6" type="button" title="Peer detail">
-				<span class="spell-glyph">P</span><span class="spell-key">6</span>
-			</button>
-			<button class="spell-slot" data-target="peer-chat"   data-key="7" type="button" title="Peer chat">
-				<span class="spell-glyph">⌨</span><span class="spell-key">7</span>
-			</button>
-			<button class="spell-slot" data-target="inspector"   data-key="8" type="button" title="Inspector (click an agent to chat)">
-				<span class="spell-glyph">I</span><span class="spell-key">9</span>
+			<button class="spell-slot" data-target="inspector"   data-key="6" type="button" title="Inspector (click an agent to chat)">
+				<span class="spell-glyph">I</span><span class="spell-key">6</span>
 			</button>
 			<button class="spell-slot" data-target="livelog"     data-key="0" type="button" title="Live log / combat log">
 				<span class="spell-glyph">⚡</span><span class="spell-key">0</span>
 			</button>
 		</div>
 	</nav>
-
-	<!-- Peer detail panel. Opens when you click a remote peer's sun.
-	     Lists the host (their principal/human) and any agents they've
-	     announced in their roster. Clicking any row spawns the
-	     peer-chat overlay targeted at that entity. Managed by
-	     peer-detail-panel.js. -->
-	<aside id="peer-detail" class="peer-detail" hidden>
-		<header class="peer-detail-header">
-			<span class="peer-detail-title" id="peer-detail-title">Peer</span>
-			<button class="peer-detail-close" id="peer-detail-close" title="Close">×</button>
-		</header>
-		<section class="peer-detail-body" id="peer-detail-body">
-			<!-- Populated dynamically. Sections: host, agents. -->
-		</section>
-	</aside>
-
-	<!-- Peer-chat overlay. Floats above the scene when a peered row is
-	     clicked in the Network panel. Open/close state and polling are
-	     managed by peer-chat-panel.js. -->
-	<div id="peer-chat" class="peer-chat" hidden>
-		<header class="peer-chat-header">
-			<span class="peer-chat-title" id="peer-chat-title">Chat</span>
-			<button class="peer-chat-close" id="peer-chat-close" title="Close">×</button>
-		</header>
-		<ul class="peer-chat-messages" id="peer-chat-messages"></ul>
-		<form class="peer-chat-compose" id="peer-chat-compose">
-			<input id="peer-chat-input" type="text" autocomplete="off" placeholder="Say something..." maxlength="8000" />
-			<button type="submit" id="peer-chat-send" title="Send">↩</button>
-		</form>
-		<div class="peer-chat-status muted small" id="peer-chat-status"></div>
-	</div>
 
 	<aside id="inspector">
 		<button class="panel-collapse" data-panel="inspector" title="Collapse">─</button>
