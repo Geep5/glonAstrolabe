@@ -21,7 +21,7 @@ import { dispatchToDaemon } from "./daemon-client.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, "..");
-const FIGGIES_ROOT = process.env.FIGGIES_ROOT ?? join(homedir(), ".figgies");
+const FIGGIES_ROOT = process.env.FIGGIES_ROOT ?? process.env.GLON_ROOT ?? join(homedir(), ".glon");
 
 const app = express();
 app.disable("x-powered-by");
