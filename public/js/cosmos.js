@@ -623,58 +623,8 @@ export function buildCosmos(state, materials) {
 		group.add(corona);
 	}
 
-	// ── Auction House marker (the bazaar) ─────────────────────────
-	// A distinctive octahedron orbiting near the local sun, cyan-emissive
-	// to match the auctions panel badge. Clicking it opens the panel.
-	// Always present — even when there are no auctions in the view, it
-	// signals "this is where trade happens."
-	{
-		const ahPos = new THREE.Vector3(7, RING_Y, 0);
-		const ahGeo = new THREE.OctahedronGeometry(0.9, 0);
-		const ahMat = new THREE.MeshStandardMaterial({
-			color: 0x0e2825,
-			emissive: 0x5eead4,
-			emissiveIntensity: 1.2,
-			roughness: 0.25,
-			metalness: 0.4,
-			toneMapped: false,
-		});
-		const ah = new THREE.Mesh(ahGeo, ahMat);
-		ah.position.copy(ahPos);
-		ah.userData = { kind: "auction-house" };
-		group.add(ah);
-
-		// Soft halo so it stands out from a distance.
-		const haloGeo = new THREE.SphereGeometry(1.6, 24, 16);
-		const haloMat = new THREE.MeshBasicMaterial({
-			color: 0x5eead4,
-			transparent: true,
-			opacity: 0.14,
-			depthWrite: false,
-		});
-		const halo = new THREE.Mesh(haloGeo, haloMat);
-		halo.position.copy(ahPos);
-		halo.userData = { kind: "auction-house-halo" };
-		group.add(halo);
-
-		// Two thin rings tipped at right angles — reads as an "armillary
-		// sphere" / marketplace beacon.
-		for (const axis of ["x", "z"]) {
-			const ringGeo = new THREE.TorusGeometry(1.35, 0.04, 8, 48);
-			const ringMat = new THREE.MeshBasicMaterial({
-				color: 0x5eead4,
-				transparent: true,
-				opacity: 0.55,
-				depthWrite: false,
-			});
-			const ring = new THREE.Mesh(ringGeo, ringMat);
-			ring.position.copy(ahPos);
-			if (axis === "x") ring.rotation.y = Math.PI / 2;
-			else              ring.rotation.x = Math.PI / 2;
-			ring.userData = { kind: "auction-house-ring" };
-			group.add(ring);
-		}
-	}
+	// Auction-house marker (octahedron + halo + armillary rings) was here.
+	// Removed alongside the /auction program — no place to fly to anymore.
 
 	// Nodes --------------------------------------------------------
 	for (let tIdx = 0; tIdx < typeKeysOrdered.length; tIdx++) {
