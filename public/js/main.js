@@ -105,6 +105,8 @@ const materials = {
 		contextAgentId = agents[0]?.id ?? null;
 		// Agent chat lives inside the inspector now; no floating chat-dock.
 		initNetworkPanel();
+		renderAgentsWidget(agents);
+		startAgentsWidgetRefresh();
 		// Peer chat + peer detail floating panels were folded into the
 		// inspector. Their imports + inits are gone.
 		initSpellBar();
@@ -476,10 +478,66 @@ function startJobsRefresh() {
 		try {
 			const s = await fetch("/api/state").then((r) => r.json());
 			renderJobs(s.objects);
+			renderAgentsWidget(s.objects.filter((o) => o.typeKey === "agent"));
 		} catch { /* keep last paint on transient error */ }
 	}, JOBS_POLL_MS);
 	// Smooth 1Hz tick to update reminder countdown bars between polls.
 	setInterval(tickReminderBars, 1000);
+}
+
+// ── Agents widget (top-bar chip list) ─────────────────────────────
+// Shows every local agent as a clickable chip. Click → inspector
+// opens for that agent (Chat tab pre-loaded). The chip carries the
+// agent's display name — same string you use in
+// peer_conversation_start({display_name: ...}) when telling one
+// agent to talk to another.
+let lastAgentsWidgetHtml = "";
+function renderAgentsWidget(agents) {
+	const host = document.getElementById("agents-widget");
+	if (!host) return;
+	const sorted = [...(agents ?? [])]
+		.filter((a) => !a.deleted)
+		.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+	if (sorted.length === 0) {
+		const html = `<span class="agents-widget-empty muted small">no agents — bootstrap one via /holdfast</span>`;
+		if (html !== lastAgentsWidgetHtml) {
+			host.innerHTML = html;
+			lastAgentsWidgetHtml = html;
+		}
+		return;
+	}
+	const now = Date.now();
+	const html = sorted.map((a) => {
+		const name = a.name ?? "(unnamed)";
+		const last = a.agentStats?.lastActivity ?? 0;
+		const liveDot = last && (now - last) < 60_000 ? "live" : "idle";
+		const turns = a.agentStats?.userTurns ?? 0;
+		const title = `${name} · model ${a.agentStats?.model ?? "?"} · ${turns} turns · ${last ? formatTimeShort(last) : "no activity"}`;
+		return `<button class="agent-chip" data-id="${escapeHtml(a.id)}" title="${escapeHtml(title)}">
+			<span class="agent-chip-dot ${liveDot}"></span>
+			<span class="agent-chip-name">${escapeHtml(name)}</span>
+		</button>`;
+	}).join("");
+	if (html !== lastAgentsWidgetHtml) {
+		host.innerHTML = html;
+		lastAgentsWidgetHtml = html;
+		for (const btn of host.querySelectorAll(".agent-chip")) {
+			btn.addEventListener("click", () => {
+				const id = btn.dataset.id;
+				if (id) select(id, { focus: false });
+			});
+		}
+	}
+}
+function formatTimeShort(ms) {
+	const ageS = Math.floor((Date.now() - ms) / 1000);
+	if (ageS < 60) return `${ageS}s ago`;
+	if (ageS < 3600) return `${Math.floor(ageS / 60)}m ago`;
+	if (ageS < 86400) return `${Math.floor(ageS / 3600)}h ago`;
+	return `${Math.floor(ageS / 86400)}d ago`;
+}
+function startAgentsWidgetRefresh() {
+	// Piggybacks on startJobsRefresh's /api/state poll; nothing else needed.
 }
 
 	// ── Conversation nodes (per-convo bodies floating between participants) ──
