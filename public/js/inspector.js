@@ -626,14 +626,20 @@ async function refreshPeersPane(id) {
 	}
 }
 
-async function fetchAgentConvos(_agentId) {
-	// /peer-chat is a singleton actor; it returns all conversations the
-	// daemon knows about. When we go multi-agent-per-device we'll filter
-	// by sender here.
+async function fetchAgentConvos(agentId) {
+	// /peer-chat singleton stores one conversation per "other side". When
+	// two agents on the same daemon chat, BOTH perspectives land in the
+	// singleton: a conversation keyed by the other agent's identity. To
+	// show only the current agent's view, drop conversations whose key
+	// IS this agent (those belong to the OTHER agent's perspective).
 	try {
 		const r = await fetch("/api/peer-chat/conversations");
 		const data = await r.json();
-		return Array.isArray(data?.conversations) ? data.conversations : [];
+		const all = Array.isArray(data?.conversations) ? data.conversations : [];
+		const ownLocal = agentId ? `local:${agentId}`.toLowerCase() : "";
+		return ownLocal
+			? all.filter((c) => (c.peer_identity_pubkey ?? "").toLowerCase() !== ownLocal)
+			: all;
 	} catch { return []; }
 }
 
