@@ -23,9 +23,6 @@ const FIXED = {
 	discord:    "#b7bcf2",
 	gc:         "#a3a3a3",
 	unknown:    "#6b7488",
-	"chain.token": "#ffd700",
-	"chain.coin.bucket": "#c0c0c0",
-	trading_agent: "#ff6b6b",
 	};
 
 	function hashHue(s) {

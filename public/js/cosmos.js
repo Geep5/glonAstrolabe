@@ -125,9 +125,6 @@ const TYPE_LAYOUT = {
 	reminder:    { radius: 8, y: 0.6,  scale: 0.6 },
 	type:        { radius: 9, y: -0.3, scale: 0.6 },
 	milestone:   { radius: 10, y: 1.0,  scale: 0.65 },
-	"chain.token": { radius: 11, y: 0.5, scale: 0.8 },
-	"chain.coin.bucket": { radius: 12, y: 0.3, scale: 0.8 },
-	"chain.coin.offer": { radius: 13, y: -0.3, scale: 0.8 },
 	program:    { radius: 14, y: 1.5,  scale: 0.45 },
 	typescript: { radius: 16, y: 0,    scale: 0.4 },
 	javascript: { radius: 17, y: 0,    scale: 0.4 },
@@ -149,7 +146,6 @@ function layoutForType(typeKey, computedRadii) {
 // New types not listed here are appended automatically after the last known type.
 const TYPE_PRIORITY = [
 	"agent",
-	"trading_agent",
 	"peer",
 	"chat",
 	"ttt",
@@ -158,9 +154,6 @@ const TYPE_PRIORITY = [
 	"reminder",
 	"type",
 	"milestone",
-	"chain.token",
-	"chain.coin.bucket",
-	"chain.coin.offer",
 	"program",
 	"typescript",
 	"javascript",
@@ -370,41 +363,10 @@ export function buildCosmos(state, materials) {
 	}
 	const spawnDepthOf = (obj) => Number(obj.scalars?.spawn_depth ?? 0);
 
-	// ── Crypto value scaling ───────────────────────────────────────
-	// Coin buckets, tokens, and offers scale by economic weight so a
-	// wallet holding 1M coins is visually distinct from one holding 5.
-	function cryptoValue(obj) {
-		const type = obj.typeKey;
-		if (type === "chain.coin.bucket" && obj.coinState) {
-			try { return Number(obj.coinState.totalAmount) || 0; } catch { return 0; }
-		}
-		if (type === "chain.token") {
-			const supply = obj.rawFields?.total_supply ?? obj.rawFields?.supply ?? obj.scalars?.total_supply;
-			if (supply != null) try { return Number(supply) || 0; } catch { return 0; }
-		}
-		if (type === "chain.coin.offer") {
-			const amount = obj.rawFields?.amount ?? obj.scalars?.amount;
-			if (amount != null) try { return Number(amount) || 0; } catch { return 0; }
-		}
-		return 0;
-	}
-	const cryptoMax = new Map();
-	for (const obj of state.objects) {
-		const val = cryptoValue(obj);
-		if (val > 0) {
-			const prev = cryptoMax.get(obj.typeKey) ?? 0;
-			if (val > prev) cryptoMax.set(obj.typeKey, val);
-		}
-	}
-	function valueScaleFor(obj) {
-		const type = obj.typeKey;
-		const val = cryptoValue(obj);
-		const max = cryptoMax.get(type);
-		if (!val || !max || max <= 0) return null;
-		// Log-scaled 0.5..2.0 range; tiny wallets still visible, whales prominent
-		const t = Math.log10(1 + val) / Math.log10(1 + max);
-		return 0.5 + t * 1.5;
-	}
+	// Per-object size scaling used to be driven by crypto values (token
+	// supply, wallet balance, offer amount). Now that the /coin program
+	// is gone, everything uses the constant scale from layoutForType().
+	function valueScaleFor(_obj) { return null; }
 	const positions = new Map(); // id → THREE.Vector3
 	const homePositions = new Map(); // id → THREE.Vector3 (frozen after placement)
 	const nodes = new Map();     // id → { mesh, ring, halo? }

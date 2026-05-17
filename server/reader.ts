@@ -16,13 +16,6 @@ import { homedir } from "node:os";
 	import { decodeChange, unwrapValue, type Change, type Value, type ObjectLink, type Block } from "glon/proto.js";
 	import { computeState, getPrimaryContent, type ObjectState } from "glon/dag/dag.js";
 	import { hexEncode } from "glon/crypto.js";
-	import { type CoinState, buildCoinState, BUCKET_TYPE_KEY } from "./coins.js";
-
-	// Hard-coded token metadata for tokens that exist only in program
-	// constants (e.g. FIGGIES reward token) and have no on-disk object.
-	const KNOWN_TOKENS: Record<string, { name: string; symbol: string }> = {
-		b1aa1f2da78048a6a2051db9: { name: "Figgies", symbol: "FIGGIES" },
-	};
 
 	const GLON_ROOT = process.env.GLON_DATA ?? join(homedir(), ".glon");
 	const CHANGES_DIR = join(GLON_ROOT, "changes");
@@ -371,7 +364,6 @@ interface PerObject {
 	blocks: VizBlock[];
 	tools: VizTool[];
 	outLinks: { targetId: string; relationKey: string; fieldPath: string }[];
-	coinState?: CoinState;
 }
 
 function buildPerObject(objectId: string, changes: Change[]): PerObject | null {
@@ -393,7 +385,6 @@ function buildPerObject(objectId: string, changes: Change[]): PerObject | null {
 
 	const tools = state.typeKey === "agent" ? extractToolsField(state.fields.get("tools")) : [];
 	const blocks = state.typeKey === "agent" ? classifyBlocks(state) : [];
-	const coinState = state.typeKey === BUCKET_TYPE_KEY ? (buildCoinState(state.blocks, state.fields) ?? undefined) : undefined;
 
 	const object: VizObject = {
 		id: state.id,
@@ -413,7 +404,7 @@ function buildPerObject(objectId: string, changes: Change[]): PerObject | null {
 		agentStats: state.typeKey === "agent" ? computeAgentStats(state) : undefined,
 	};
 
-	return { object, state, changes, blocks, tools, outLinks, coinState };
+	return { object, state, changes, blocks, tools, outLinks };
 	}
 
 // ── Cache layer ─────────────────────────────────────────────────
@@ -711,26 +702,12 @@ export function getObjectDetail(id: string): {
 		}
 	}
 
-		let enrichedCoinState: CoinState | undefined;
-		if (po.coinState) {
-			enrichedCoinState = { ...po.coinState };
-			if (enrichedCoinState.tokenId) {
-				const tokenPo = c.perObject.get(enrichedCoinState.tokenId);
-				if (tokenPo) {
-					enrichedCoinState.tokenName = tokenPo.object.name;
-					const sym = extractString(tokenPo.state.fields.get("symbol"));
-					if (sym) enrichedCoinState.tokenSymbol = sym;
-				}
-			}
-		}
-
 		return {
 			object: po.object,
 			outLinks,
 			inLinks,
 			rawFields,
 			contentPreview,
-			...(enrichedCoinState ? { coinState: enrichedCoinState } : {}),
 			walletPubkeys: [...getWalletPubkeys()],
 		};
 }
@@ -995,31 +972,4 @@ export function search(query: string, limit: number = 20): SearchResults {
 }
 
 
-	export function getCoinOverview(): { buckets: (VizObject & { coinState: CoinState })[] } {
-		const c = getCache();
-		const buckets: (VizObject & { coinState: CoinState })[] = [];
-		for (const po of c.perObject.values()) {
-			if (po.object.typeKey !== BUCKET_TYPE_KEY) continue;
-			if (!po.coinState) continue;
-			const enriched: CoinState = { ...po.coinState };
-			if (enriched.tokenId) {
-				const tokenPo = c.perObject.get(enriched.tokenId);
-				if (tokenPo) {
-					enriched.tokenName = tokenPo.object.name;
-					const sym = extractString(tokenPo.state.fields.get("symbol"));
-					if (sym) enriched.tokenSymbol = sym;
-				}
-				// Fallback for tokens that exist only in program constants
-				// (e.g. FIGGIES reward token) and have no on-disk object.
-				if (!enriched.tokenName) {
-					const known = KNOWN_TOKENS[enriched.tokenId];
-					if (known) {
-						enriched.tokenName = known.name;
-						enriched.tokenSymbol = known.symbol;
-					}
-				}
-			}
-			buckets.push({ ...po.object, coinState: enriched });
-		}
-		return { buckets };
-	}
+	// getCoinOverview was here — removed with the /coin program.

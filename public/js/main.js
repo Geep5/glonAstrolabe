@@ -464,7 +464,6 @@ function setupThree() {
 			legend.appendChild(li);
 		}
 		renderJobs(snapshot.objects);
-		renderCoins(snapshot.objects);
 		startJobsRefresh();
 		startTasksRefresh();
 		startConversationsRefresh();
@@ -480,7 +479,6 @@ function startJobsRefresh() {
 		try {
 			const s = await fetch("/api/state").then((r) => r.json());
 			renderJobs(s.objects);
-			renderCoins(s.objects);
 		} catch { /* keep last paint on transient error */ }
 	}, JOBS_POLL_MS);
 	// Smooth 1Hz tick to update reminder countdown bars between polls.
@@ -751,76 +749,6 @@ function renderJobs(objects) {
 	}
 }
 
-	// Coins panel: tokens deployed on the autobase + per-token holders.
-	// Replaces the old chain.coin.bucket renderer; reads from /api/coins
-	// (tokens) and /api/coins/:id/holders.
-	async function renderCoins(_objects) {
-		const host = document.getElementById("crypto-list");
-		const countEl = document.getElementById("crypto-count");
-		if (!host) return;
-
-		try {
-			const r = await fetch("/api/coins").then((res) => res.json());
-			if (!r?.ok) {
-				host.innerHTML = `<li class="coins-row empty">${r?.error ?? "autobase offline"}</li>`;
-				countEl.textContent = "";
-				return;
-			}
-			const tokens = r.tokens ?? [];
-			countEl.textContent = String(tokens.length);
-			host.innerHTML = "";
-
-			if (tokens.length === 0) {
-				const li = document.createElement("li");
-				li.className = "coins-row empty";
-				li.textContent = "no tokens deployed yet";
-				host.appendChild(li);
-				return;
-			}
-
-			// Render each token, then lazy-load its holders to show top-holder
-			// summary inline. Skip malformed tokens (defense in depth).
-			for (const t of tokens) {
-				if (!t?.name) continue;
-				const li = document.createElement("li");
-				li.className = "coins-row";
-				const renounced = t.mint_renounced ? "" : ` · mint-open`;
-				li.innerHTML = `
-					<span class="coins-dot" style="background:#5eead4"></span>
-					<span class="coins-name">${escapeHtml(t.name ?? t.symbol ?? "?")}${t.symbol ? ` <span class="muted small">(${escapeHtml(t.symbol)})</span>` : ""}</span>
-					<span class="coins-meta">${shortId(t.token_id)} · supply ${escapeHtml(String(t.supply))}${renounced}</span>
-					<div class="coins-holders muted small" data-token="${escapeHtml(t.token_id)}"></div>
-				`;
-				li.style.cursor = "pointer";
-				li.title = "Click to fly to the auction house";
-				li.addEventListener("click", () => focusOnAuctionHouse());
-				host.appendChild(li);
-				// Lazy load holders (don't block paint).
-				fetch(`/api/coins/${encodeURIComponent(t.token_id)}/holders`)
-					.then((res) => res.json())
-					.then((hr) => {
-						const holdersEl = li.querySelector(".coins-holders");
-						if (!holdersEl) return;
-						if (!hr?.ok) { holdersEl.textContent = "(no balances yet)"; return; }
-						const holders = hr.holders ?? [];
-						if (holders.length === 0) { holdersEl.textContent = "(no balances)"; return; }
-						const lines = holders.slice(0, 4).map((h) => {
-							const tag = h.pubkey === t.owner_pubkey ? " (owner)" : "";
-							return `${escapeHtml(shortId(h.pubkey))} · ${escapeHtml(h.balance)}${tag}`;
-						});
-						holdersEl.innerHTML = lines.join("<br>");
-					})
-					.catch(() => {
-						const holdersEl = li.querySelector(".coins-holders");
-						if (holdersEl) holdersEl.textContent = "(holders unreachable)";
-					});
-			}
-		} catch (err) {
-			// keep last paint on transient error
-		}
-	}
-
-
 // Cached so the 1Hz tick can recompute countdown bars without re-fetching.
 let jobsRows = [];
 
@@ -954,7 +882,6 @@ function refreshPickables() {
 	cosmosCtx.group.traverse((obj) => {
 		if (obj.userData?.kind === "object") pickables.push(obj);
 		else if (obj.userData?.kind === "conversation") pickables.push(obj);
-		else if (obj.userData?.kind === "auction-house") pickables.push(obj);
 	});
 
 }
@@ -1048,7 +975,6 @@ function bindUI() {
 		makeDraggable("jobs",        null, "glonAstrolabe.panelPos.jobs");
 		makeDraggable("tasks",       null, "glonAstrolabe.panelPos.tasks");
 		makeDraggable("inspector",   null, "glonAstrolabe.panelPos.inspector");
-		makeDraggable("crypto",      null, "glonAstrolabe.panelPos.crypto");
 		makeDraggable("livelog",     null, "glonAstrolabe.panelPos.livelog");
 		makeDraggable("network",     null, "glonAstrolabe.panelPos.network");
 		makeDraggable("peer-detail", null, "glonAstrolabe.panelPos.peer-detail");
@@ -1059,7 +985,6 @@ function bindUI() {
 		makeResizable("jobs",        "glonAstrolabe.panelSize.jobs");
 		makeResizable("tasks",       "glonAstrolabe.panelSize.tasks");
 		makeResizable("inspector",   "glonAstrolabe.panelSize.inspector");
-		makeResizable("crypto",      "glonAstrolabe.panelSize.crypto");
 		makeResizable("livelog",     "glonAstrolabe.panelSize.livelog");
 		makeResizable("network",     "glonAstrolabe.panelSize.network");
 		makeResizable("peer-detail", "glonAstrolabe.panelSize.peer-detail");
@@ -1202,10 +1127,6 @@ let cursorActive = false;
 			hoverId = ud.id;
 			document.getElementById("hover").textContent = `${ud.typeKey} · ${shortId(ud.id)}`;
 			showObjectTooltip(ud.obj);
-		} else if (ud.kind === "auction-house") {
-			hoverId = null;
-			document.getElementById("hover").textContent = "auction house · click to open panel";
-			hideTooltip();
 		}
 	}
 
@@ -1228,18 +1149,6 @@ function onClick(e) {
 	const first = hits[0]?.object;
 	if (!first) return;
 	const ud = first.userData;
-	if (ud.kind === "auction-house") {
-		// Open / focus the auctions panel.
-		const panel = document.getElementById("auctions");
-		if (panel) {
-			panel.hidden = false;
-			panel.classList.add("flash");
-			setTimeout(() => panel.classList.remove("flash"), 600);
-			// Trigger a fresh refresh by rebuilding the panel — easier than
-			// exporting a refresh hook. The next poll tick (≤5s) will redraw.
-		}
-		return;
-	}
 	if (ud.kind === "object") {
 		// If this object is a network peer (a remote glon's sun or
 		// moon), open the peer-detail panel: shows the host + their
@@ -1300,39 +1209,6 @@ function onDoubleClick(e) {
 		highlightSelected();
 		if (focus) focusOnId(id);
 	}
-
-	/** Focus the camera on the auction-house 3D marker and open its panel.
-	 *  Used by the coins panel — clicking a token flies you to where it lives. */
-	function focusOnAuctionHouse() {
-		let ahMesh = null;
-		cosmosCtx?.group?.traverse?.((obj) => {
-			if (obj.userData?.kind === "auction-house") ahMesh = obj;
-		});
-		if (ahMesh) {
-			const target = ahMesh.position.clone();
-			const horizontalDir = new THREE.Vector3(target.x, 0, target.z);
-			const horizontalDist = horizontalDir.length();
-			const dist = 8;
-			if (horizontalDist < 0.001) {
-				const back = new THREE.Vector3();
-				camera.getWorldDirection(back);
-				tweenCamera(target.clone().sub(back.multiplyScalar(dist)), target);
-			} else {
-				horizontalDir.divideScalar(horizontalDist);
-				const camPos = horizontalDir.multiplyScalar(Math.max(1.5, horizontalDist - dist));
-				camPos.y = camera.position.y;
-				tweenCamera(camPos, target);
-			}
-		}
-		const panel = document.getElementById("auctions");
-		if (panel) {
-			panel.hidden = false;
-			panel.classList.add("flash");
-			setTimeout(() => panel.classList.remove("flash"), 600);
-		}
-	}
-	// Expose to other modules.
-	window.glonFocusAuctionHouse = focusOnAuctionHouse;
 
 	function focusOnId(id) {
 		const node = cosmosCtx.nodes.get(id);
