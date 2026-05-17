@@ -638,12 +638,14 @@ const PORT = Number(process.env.PORT ?? 4173);
 const HOST = process.env.HOST ?? "127.0.0.1";
 
 app.listen(PORT, HOST, () => {
-	const snap = snapshot();
-	const objCount = snap.objects.length;
-	const agentCount = snap.objects.filter((o) => o.typeKey === "agent").length;
-	const programCount = snap.objects.filter((o) => o.typeKey === "program").length;
 	console.log(`glonAstrolabe → http://${HOST}:${PORT}`);
-	console.log(`  source: ${snap.rootPath}`);
-	console.log(`  loaded: ${objCount} objects (${programCount} programs, ${agentCount} agents) with ${snap.links.length} links`);
-	startWatcher();
+	// The legacy DAG snapshot is best-effort — Figgies doesn't write change
+	// files, so the reader has nothing to load. Don't let startup fail on it.
+	try {
+		const snap = snapshot();
+		console.log(`  loaded: ${snap.objects.length} legacy objects, ${snap.links.length} links`);
+	} catch (err: any) {
+		console.log(`  legacy DAG snapshot skipped: ${err?.message ?? err}`);
+	}
+	try { startWatcher(); } catch (err: any) { console.log(`  events watcher skipped: ${err?.message ?? err}`); }
 });

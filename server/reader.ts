@@ -31,8 +31,15 @@ import { homedir } from "node:os";
 	let walletPubkeys: Set<string> | null = null;
 	let walletMtime = 0;
 
+	// Figgies stores wallet info at ~/.figgies/wallet.json (one user per
+	// device). Fall back to the legacy ~/.glon/wallet.json path for
+	// compatibility while migrating.
+	const FIGGIES_ROOT = process.env.FIGGIES_ROOT ?? join(homedir(), ".figgies");
+
 	export function getWalletPubkeys(): Set<string> {
-		const path = join(GLON_ROOT, "wallet.json");
+		const figgiesPath = join(FIGGIES_ROOT, "wallet.json");
+		const glonPath = join(GLON_ROOT, "wallet.json");
+		const path = existsSync(figgiesPath) ? figgiesPath : glonPath;
 		if (!existsSync(path)) return new Set();
 		const mtime = statSync(path).mtimeMs;
 		if (walletPubkeys && walletMtime === mtime) return walletPubkeys;
