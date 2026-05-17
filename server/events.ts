@@ -251,6 +251,19 @@ function previewValue(v: any): string | undefined {
 	if (typeof v.floatValue === "number") return String(v.floatValue);
 	if (typeof v.boolValue === "boolean") return String(v.boolValue);
 	if (v.linkValue) return `→${shortId(v.linkValue.targetId)}`;
+	// listValue and mapValue carry no useful scalar in a one-liner, but
+	// "tools = " with nothing after it is worse than a count. Render the
+	// shape so the livelog reads sensibly when an agent's tools array or
+	// a manifest map gets replaced.
+	if (v.listValue) {
+		const n = Array.isArray(v.listValue.values) ? v.listValue.values.length : 0;
+		return `[${n} item${n === 1 ? "" : "s"}]`;
+	}
+	if (v.mapValue) {
+		const entries = v.mapValue.entries;
+		const n = entries ? Object.keys(entries).length : 0;
+		return `{${n} key${n === 1 ? "" : "s"}}`;
+	}
 	return undefined;
 }
 
