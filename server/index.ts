@@ -216,18 +216,27 @@ app.post("/api/network/peer", async (req, res) => {
 });
 
 // Forget a peer: remove its /peer record AND any kind=agent records that
-// pointed at it via host_peer_id (orphaned remote-agent rows). Useful for
-// pruning stale testing peers after repeated resets on the other side.
+// pointed at it via host_peer_id (orphaned remote-agent rows) AND drop
+// it from /directory's state.discovered AND blocklist it so future
+// announces don't re-add it. Useful for pruning stale testing peers
+// after repeated resets on the other side.
 app.post("/api/network/peers/:id/forget", async (req, res) => {
 	const hostId = req.params.id;
 	if (!hostId) return res.status(400).json({ ok: false, error: "peer id required" });
 	try {
 		const peerList = await dispatchToDaemon("/peer", "list", []) as any[];
+		// Snapshot the host's identity/hyperswarm pubkey BEFORE removing —
+		// we need them to tell /directory which discovered entry to drop.
+		const hostRow = (peerList || []).find((p) => p?.id === hostId);
+		const host_identity = (hostRow?.identity_pubkey ?? "").trim();
+		const host_hyperswarm = (hostRow?.hyperswarm_pubkey ?? "").trim();
 		const targets = [hostId];
-		// Sweep up remote-agent records that belong to this host so the
-		// network panel doesn't keep showing orphaned agent sub-rows.
+		const agentRemoteIdentities: string[] = [];
 		for (const p of peerList || []) {
-			if (p?.kind === "agent" && p?.host_peer_id === hostId) targets.push(p.id);
+			if (p?.kind === "agent" && p?.host_peer_id === hostId) {
+				targets.push(p.id);
+				if (p?.identity_pubkey) agentRemoteIdentities.push(p.identity_pubkey);
+			}
 		}
 		const removed: string[] = [];
 		for (const id of targets) {
@@ -237,6 +246,25 @@ app.post("/api/network/peers/:id/forget", async (req, res) => {
 			} catch (err: any) {
 				console.log(`[forget] failed to remove ${id}: ${err?.message ?? err}`);
 			}
+		}
+		// Drop from /directory's discovered cache + add to its blocklist
+		// so the very next announce doesn't bring the row back.
+		if (host_identity || host_hyperswarm) {
+			try {
+				await dispatchToDaemon("/directory", "forgetDiscovered", [{
+					identity_pubkey: host_identity || undefined,
+					hyperswarm_pubkey: host_hyperswarm || undefined,
+				}]);
+			} catch (err: any) {
+				console.log(`[forget] forgetDiscovered failed: ${err?.message ?? err}`);
+			}
+		}
+		// Also blocklist each remote-agent synthetic identity so they don't
+		// get re-created as fresh /peer records from the host's next roster.
+		for (const ident of agentRemoteIdentities) {
+			try {
+				await dispatchToDaemon("/directory", "forgetDiscovered", [{ identity_pubkey: ident }]);
+			} catch { /* best-effort */ }
 		}
 		res.json({ ok: true, removed });
 	} catch (err: any) {
