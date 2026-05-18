@@ -164,6 +164,16 @@
 				<div id="insp-peer-chat-status" class="insp-chat-status muted small"></div>
 			</div>
 
+			<!-- Self-peer inbox: shown when inspecting your own self peer.
+				 Lists every conversation you're a participant in (local-agent
+				 LLM threads + peer-chats). Each row navigates the inspector
+				 to that agent/peer for the full chat. -->
+			<div class="insp-section" id="insp-self-chats-section" hidden>
+				<h3>Your conversations</h3>
+				<ul id="insp-self-chats-list" class="insp-self-chats-list"></ul>
+				<div id="insp-self-chats-empty" class="muted small" hidden>No conversations yet. Click any agent in the cosmos, or any peered host in the network panel.</div>
+			</div>
+
 			<div class="insp-section" id="insp-scalars-section" hidden>
 				<h3>Fields</h3>
 				<div id="insp-scalars" class="kv"></div>

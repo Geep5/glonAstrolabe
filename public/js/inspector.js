@@ -56,6 +56,10 @@
 		peerChatInput: document.getElementById("insp-peer-chat-input"),
 		peerChatSend: document.getElementById("insp-peer-chat-send"),
 		peerChatStatus: document.getElementById("insp-peer-chat-status"),
+		// Self-peer inbox (shown when inspecting the self peer)
+		selfChatsSection: document.getElementById("insp-self-chats-section"),
+		selfChatsList: document.getElementById("insp-self-chats-list"),
+		selfChatsEmpty: document.getElementById("insp-self-chats-empty"),
 	};
 
 	// Wire up Planet Forge once
@@ -166,12 +170,21 @@ export async function showObject(id) {
 	if (obj?.typeKey === "agent") {
 		startAgentChatBindings(obj);
 		stopPeerChatBindings();
+		stopSelfChatList();
 	} else if (obj?.typeKey === "peer") {
 		stopAgentChatBindings();
-		startPeerChatBindings(obj);
+		const kind = String(obj?.scalars?.kind ?? "");
+		if (kind === "self") {
+			stopPeerChatBindings();
+			startSelfChatList(obj);
+		} else {
+			stopSelfChatList();
+			startPeerChatBindings(obj);
+		}
 	} else {
 		stopAgentChatBindings();
 		stopPeerChatBindings();
+		stopSelfChatList();
 	}
 }
 
@@ -179,6 +192,7 @@ export function clear() {
 	currentId = null;
 	stopAgentChatBindings();
 	stopPeerChatBindings();
+	stopSelfChatList();
 	els.empty.hidden = false;
 	els.content.hidden = true;
 }
@@ -227,9 +241,10 @@ function render(detail, changesResponse) {
 	const obj = detail.object;
 	els.empty.hidden = true;
 	els.content.hidden = false;
-	// Peer chat is shown only by startPeerChatBindings; default to hidden
-	// so it doesn't carry over from a previously-inspected peer.
+	// Peer chat and self-chats are opt-in panes; default to hidden so
+	// they don't carry over from a previously-inspected object.
 	if (els.peerChatSection) els.peerChatSection.hidden = true;
+	if (els.selfChatsSection) els.selfChatsSection.hidden = true;
 
 	// Header ------------------------------------------------------
 	const { hex } = colorForType(obj.typeKey);
@@ -880,6 +895,101 @@ async function pollPeerChat() {
 			lastPeerChatRender = html;
 			els.peerChatHistory.scrollTop = els.peerChatHistory.scrollHeight;
 		}
+	} catch (err) {
+		// Silent — transient backend errors shouldn't spam the user.
+	}
+}
+
+// ── Self-peer inbox (your conversations) ──────────────────────────────
+//
+// Shown when inspecting the self peer. Lists every conversation you're a
+// participant in — local-agent LLM threads + peer-chat threads — so the
+// self-peer object becomes a single "what am I talking about?" launcher.
+// Each row navigates the inspector to the relevant agent/peer (no popups,
+// no expand-in-place). Polls every 3s while the self peer is selected.
+
+const SELF_CHATS_POLL_MS = 3_000;
+let selfChatsPollHandle = null;
+let lastSelfChatsRender = "";
+
+export function startSelfChatList(selfPeerObject) {
+	if (!els.selfChatsSection) return;
+	els.selfChatsSection.hidden = false;
+	els.selfChatsList.innerHTML = "";
+	lastSelfChatsRender = "";
+	pollSelfChats();
+	selfChatsPollHandle = setInterval(pollSelfChats, SELF_CHATS_POLL_MS);
+	wireSelfChatsClicks();
+}
+
+export function stopSelfChatList() {
+	if (selfChatsPollHandle) {
+		clearInterval(selfChatsPollHandle);
+		selfChatsPollHandle = null;
+	}
+	if (els.selfChatsSection) els.selfChatsSection.hidden = true;
+}
+
+let selfChatsClicksWired = false;
+function wireSelfChatsClicks() {
+	if (selfChatsClicksWired) return;
+	selfChatsClicksWired = true;
+	if (!els.selfChatsList) return;
+	els.selfChatsList.addEventListener("click", (e) => {
+		const row = e.target.closest("[data-target-id]");
+		if (!row) return;
+		const id = row.getAttribute("data-target-id");
+		if (id) {
+			try { window.glonSelectObject?.(id); } catch {}
+		}
+	});
+}
+
+async function pollSelfChats() {
+	try {
+		const [agentsResp, convosResp] = await Promise.all([
+			fetch("/api/agents").then((r) => r.json()),
+			fetch("/api/peer-chat/conversations").then((r) => r.json()),
+		]);
+		const agents = Array.isArray(agentsResp?.agents) ? agentsResp.agents : [];
+		const convos = Array.isArray(convosResp?.conversations) ? convosResp.conversations : [];
+
+		// Local-agent rows. We don't fetch each agent's full LLM thread
+		// here — too heavy for a list view. Just show the agent as a
+		// chat-able entry; clicking opens its inspector where the LLM
+		// conversation is already rendered.
+		const localAgentRows = agents.map((a) => {
+			const name = escapeHtml(a.name ?? "(unnamed)");
+			return `<li class="self-chat-row" data-target-id="${a.id}">
+				<span class="self-chat-name">${name}</span>
+				<span class="self-chat-tag muted small">local agent</span>
+			</li>`;
+		});
+
+		// Peer-chat threads — one row per conversation. Click navigates to
+		// the peer (not the conversation), because chat lives on the peer.
+		const peerConvoRows = convos
+			.slice()
+			.sort((a, b) => (b.last_message_at ?? 0) - (a.last_message_at ?? 0))
+			.map((c) => {
+				const name = escapeHtml(c.peer_display_name ?? "(unnamed)");
+				const preview = escapeHtml(String(c.last_message_preview ?? ""));
+				const when = c.last_message_at ? formatTime(c.last_message_at) : "";
+				const tag = c.peer_identity_pubkey?.startsWith?.("swarm:") ? "remote agent" : "remote host";
+				return `<li class="self-chat-row" data-target-id="${c.peer_object_id}">
+					<span class="self-chat-name">${name}</span>
+					<span class="self-chat-tag muted small">${tag}</span>
+					<span class="self-chat-preview muted small">${preview}</span>
+					<span class="self-chat-when muted small">${when}</span>
+				</li>`;
+			});
+
+		const html = [...localAgentRows, ...peerConvoRows].join("");
+		if (html !== lastSelfChatsRender) {
+			els.selfChatsList.innerHTML = html;
+			lastSelfChatsRender = html;
+		}
+		if (els.selfChatsEmpty) els.selfChatsEmpty.hidden = html.length > 0;
 	} catch (err) {
 		// Silent — transient backend errors shouldn't spam the user.
 	}
