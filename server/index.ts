@@ -159,9 +159,32 @@ app.get("/api/network/peers", async (_req, res) => {
 				|| trustMap.get((p.agent_name || "").toLowerCase())
 				|| (p.peer_object_id ? "trusted" : "discovered"),
 			remote_agent_peers: p.peer_object_id ? (remoteAgentsByHost.get(p.peer_object_id) ?? []) : [],
+			is_online: true,
 		}));
-		console.log(`[GET /api/network/peers] returning ${merged.length} merged peers`);
-		res.json({ ok: true, peers: merged });
+		// Persistent contacts: every kind=human /peer record that's peered
+		// (trusted/family/friend) but not currently in listDiscovered. Lets
+		// the network panel render trusted peers as offline rows so they
+		// don't disappear when their daemon naps — like a contacts list.
+		const liveIds = new Set(merged.map((p: any) => p.peer_object_id).filter(Boolean));
+		const peeredTrust = new Set(["trusted", "family", "friend"]);
+		const offlineHosts = (peerList || [])
+			.filter((p: any) => p?.kind === "human" && peeredTrust.has(p?.trust_level) && !liveIds.has(p.id))
+			.map((p: any) => ({
+				identity_pubkey: p.identity_pubkey ?? "",
+				hyperswarm_pubkey: p.hyperswarm_pubkey ?? "",
+				agent_name: p.display_name ?? "(unnamed host)",
+				capabilities: [],
+				first_seen: null,
+				last_seen: p.last_seen ? Number(p.last_seen) : null,
+				peer_object_id: p.id,
+				agents: [],
+				trust_level: p.trust_level,
+				remote_agent_peers: remoteAgentsByHost.get(p.id) ?? [],
+				is_online: false,
+			}));
+		const allPeers = [...merged, ...offlineHosts];
+		console.log(`[GET /api/network/peers] returning ${merged.length} online + ${offlineHosts.length} offline`);
+		res.json({ ok: true, peers: allPeers });
 	} catch (err: any) {
 		console.log("[GET /api/network/peers] caught error (graceful fallback):", err?.message);
 		// Return empty peers list instead of crashing

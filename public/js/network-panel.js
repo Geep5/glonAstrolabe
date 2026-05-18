@@ -34,6 +34,17 @@ function trustClass(level) {
 	return "";
 }
 
+// Render a millisecond timestamp as a compact relative-time string ("5m",
+// "2h", "3d"). Used for the offline-peer "last seen" badge.
+function shortAgo(ms) {
+	if (!ms || typeof ms !== "number") return "";
+	const dt = Date.now() - ms;
+	if (dt < 60_000) return `${Math.max(1, Math.round(dt / 1000))}s`;
+	if (dt < 3_600_000) return `${Math.round(dt / 60_000)}m`;
+	if (dt < 86_400_000) return `${Math.round(dt / 3_600_000)}h`;
+	return `${Math.round(dt / 86_400_000)}d`;
+}
+
 async function postAction(url, body) {
 	const opts = { method: "POST", headers: { "Content-Type": "application/json" } };
 	if (body !== undefined) opts.body = JSON.stringify(body);
@@ -109,43 +120,58 @@ async function postAction(url, body) {
 			.map((q) => (q.peer_hyperswarm_pubkey || "").toLowerCase())
 	);
 
-	// Each discovered peer is a remote glon → one "host" row (the human
-	// principal, addressable for human-to-human chat) plus one indented
-	// sub-row per agent on that glon (informational; agent chat happens
-	// from the cosmos by clicking the agent's ball).
-	const rows = peers.map((p) => {
+	// Each peer is a remote glon → one "host" row (the human principal,
+	// addressable for human-to-human chat) plus one indented sub-row per
+	// agent on that glon. Online peers come from listDiscovered; offline
+	// peers are trusted /peer records the server merged in so trusted
+	// contacts stay visible across sleeps and network blips.
+	// Sort: online first, then offline by last_seen desc.
+	const sortedPeers = peers.slice().sort((a, b) => {
+		const ao = a.is_online === false ? 1 : 0;
+		const bo = b.is_online === false ? 1 : 0;
+		if (ao !== bo) return ao - bo;
+		return (b.last_seen ?? 0) - (a.last_seen ?? 0);
+	});
+	const rows = sortedPeers.map((p) => {
 		// Trust level comes from /peer program via API merge.
 		const trustLevel = p.trust_level || (p.peer_object_id ? "trusted" : "discovered");
 		const id = shortKey(p.identity_pubkey || p.hyperswarm_pubkey);
 		const suffix = peerSuffix(p.identity_pubkey, p.hyperswarm_pubkey);
 		const hpLower = (p.hyperswarm_pubkey || "").toLowerCase();
+		const isOnline = p.is_online !== false;        // true unless explicitly false
+		const offlineClass = isOnline ? "" : "offline";
+		const stateLabel = isOnline
+			? ""
+			: `<span class="offline-tag muted small" title="${p.last_seen ? new Date(p.last_seen).toISOString() : ''}">offline${p.last_seen ? ` · ${shortAgo(p.last_seen)}` : ""}</span>`;
 		let action;
 		if (trustLevel === "trusted") {
 			// Peered → chat opens the host (principal) in the inspector,
 			// where the Peer chats tab handles human-to-human messaging.
+			// Offline peers keep the affordance — sends won't deliver
+			// until they're back, but the user can still queue messages.
 			action = `<button class="network-action" data-action="chat" data-peer-id="${p.peer_object_id ?? ""}" data-identity="${p.identity_pubkey ?? ""}">chat</button>`;
 		} else if (outgoingPending.has(hpLower)) {
 			action = `<button class="network-action muted" disabled>sent · waiting</button>`;
 		} else {
 			action = `<button class="network-action" data-action="peer" data-hyperswarm="${p.hyperswarm_pubkey}" data-identity="${p.identity_pubkey ?? ""}">peer with</button>`;
 		}
-		const hostRow = `<li class="network-row ${trustClass(trustLevel)}">
+		const hostRow = `<li class="network-row ${trustClass(trustLevel)} ${offlineClass}">
 			<span class="network-dot"></span>
-			<span class="network-name" title="${id}">host<span class="peer-suffix">·${suffix}</span></span>
+			<span class="network-name" title="${id}">host<span class="peer-suffix">·${suffix}</span>${stateLabel}</span>
 			${action}
 		</li>`;
 
-		// Render the announced agent roster as nested sub-rows so the
-		// user can see who's running on the remote glon. Each remote agent
-		// has its own /peer record (created by /directory on announce);
-		// the chat button opens that record in the inspector where the
-		// peer-chat pane is wired.
-		const remoteAgents = Array.isArray(p.agents) ? p.agents : [];
+		// Render the announced agent roster as nested sub-rows. Online
+		// peers have a live `agents` array from their announce; offline
+		// peers fall back to whatever remote_agent_peers /peer remembered.
 		const remoteAgentPeers = Array.isArray(p.remote_agent_peers) ? p.remote_agent_peers : [];
 		const peerIdByAgentId = new Map();
 		for (const rp of remoteAgentPeers) {
 			if (rp?.agent_id_remote && rp.id) peerIdByAgentId.set(rp.agent_id_remote, rp.id);
 		}
+		const remoteAgents = Array.isArray(p.agents) && p.agents.length > 0
+			? p.agents
+			: remoteAgentPeers.map((rp) => ({ id: rp.agent_id_remote, name: rp.display_name }));
 		const agentSubRows = remoteAgents.map((a) => {
 			const aName = (a.name || "(unnamed)").replace(/[<>&]/g, "");
 			const aSuffix = (a.id || "").slice(0, 8);
@@ -153,7 +179,7 @@ async function postAction(url, body) {
 			const subAction = (trustLevel === "trusted" && subPeerId)
 				? `<button class="network-action" data-action="chat" data-peer-id="${subPeerId}">chat</button>`
 				: "";
-			return `<li class="network-row remote-agent ${trustClass(trustLevel)}">
+			return `<li class="network-row remote-agent ${trustClass(trustLevel)} ${offlineClass}">
 				<span class="network-dot"></span>
 				<span class="network-name" title="${a.id || ""}">${aName}<span class="peer-suffix">·${aSuffix}</span></span>
 				${subAction}

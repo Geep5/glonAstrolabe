@@ -1289,6 +1289,18 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 .network-row.local .network-dot { background: #a78bfa; box-shadow: 0 0 6px rgba(167,139,250,.6); }
 .network-row.remote-agent { padding-left: 22px; opacity: 0.82; }
 .network-row.remote-agent .network-dot { width: 5px; height: 5px; opacity: 0.7; }
+.network-row.offline { opacity: 0.55; }
+.network-row.offline .network-dot { background: #4b5563; box-shadow: none; }
+.network-row.offline.remote-agent { opacity: 0.45; }
+.offline-tag {
+	margin-left: 6px;
+	padding: 0 5px;
+	font: 9px/14px ui-monospace, monospace;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.05);
+	color: var(--text-muted);
+	letter-spacing: 0.04em;
+}
 
 /* Self-peer "Your conversations" inbox rows */
 .insp-self-chats-list { list-style: none; margin: 0; padding: 0; }
