@@ -783,7 +783,7 @@ function wirePeerChatFormOnce() {
 				const r = await fetch("/api/peer-chat/send", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ conversation_id: conv.id, text }),
+					body: JSON.stringify({ conversation_id: conv.conversation_id, text }),
 				});
 				const data = await r.json().catch(() => null);
 				if (!r.ok || data?.ok === false) throw new Error(data?.error ?? `HTTP ${r.status}`);
