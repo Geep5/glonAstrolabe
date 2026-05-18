@@ -137,12 +137,28 @@ app.get("/api/network/peers", async (_req, res) => {
 			setBest(p.hyperswarm_pubkey, p.trust_level);
 			setBest(p.display_name, p.trust_level);
 		}
+		// Group /peer records by host_peer_id so each discovered glon row
+		// can render chat buttons on its remote agents.
+		const remoteAgentsByHost = new Map<string, any[]>();
+		for (const p of peerList || []) {
+			if (p?.kind === "agent" && p?.host_peer_id) {
+				const arr = remoteAgentsByHost.get(p.host_peer_id) ?? [];
+				arr.push({
+					id: p.id,
+					display_name: p.display_name,
+					agent_id_remote: p.agent_id_remote,
+					trust_level: p.trust_level,
+				});
+				remoteAgentsByHost.set(p.host_peer_id, arr);
+			}
+		}
 		const merged = (peers || []).map((p: any) => ({
 			...p,
 			trust_level: trustMap.get((p.identity_pubkey || "").toLowerCase())
 				|| trustMap.get((p.hyperswarm_pubkey || "").toLowerCase())
 				|| trustMap.get((p.agent_name || "").toLowerCase())
 				|| (p.peer_object_id ? "trusted" : "discovered"),
+			remote_agent_peers: p.peer_object_id ? (remoteAgentsByHost.get(p.peer_object_id) ?? []) : [],
 		}));
 		console.log(`[GET /api/network/peers] returning ${merged.length} merged peers`);
 		res.json({ ok: true, peers: merged });
@@ -252,6 +268,20 @@ app.post("/api/peer-chat/send", async (req, res) => {
 	} catch (err: any) {
 		// Distinguish trust-gate refusals (user-fixable) from swarm timeouts
 		// so the UI can show a useful message.
+		const msg = err?.message ?? String(err);
+		const status = /trust|peered|peer matches/i.test(msg) ? 400 : 503;
+		res.status(status).json({ ok: false, error: msg });
+	}
+});
+
+app.post("/api/peer-chat/start", async (req, res) => {
+	// Body: { peer_id?: string, identity_pubkey?: string, display_name?: string, goal: string, text: string }
+	// Starts a new conversation with a peer. Used by the inspector when
+	// the user types into a peer's chat pane and no active conversation exists.
+	try {
+		const result = await dispatchToDaemon("/peer-chat", "startConversation", [req.body ?? {}]);
+		res.json({ ok: true, result });
+	} catch (err: any) {
 		const msg = err?.message ?? String(err);
 		const status = /trust|peered|peer matches/i.test(msg) ? 400 : 503;
 		res.status(status).json({ ok: false, error: msg });

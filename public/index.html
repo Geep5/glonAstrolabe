@@ -152,6 +152,18 @@
 				</div>
 			</div>
 
+			<!-- Peer chat section: shown when inspecting a trusted remote peer
+				 (host or remote agent). Single thread between you and them. -->
+			<div class="insp-section" id="insp-peer-chat-section" hidden>
+				<h3 id="insp-peer-chat-title">Chat</h3>
+				<ul id="insp-peer-chat-history" class="insp-chat-history"></ul>
+				<form id="insp-peer-chat-form" class="insp-chat-form" autocomplete="off">
+					<input id="insp-peer-chat-input" type="text" placeholder="Message this peer…" maxlength="8000" />
+					<button id="insp-peer-chat-send" type="submit">Send</button>
+				</form>
+				<div id="insp-peer-chat-status" class="insp-chat-status muted small"></div>
+			</div>
+
 			<div class="insp-section" id="insp-scalars-section" hidden>
 				<h3>Fields</h3>
 				<div id="insp-scalars" class="kv"></div>

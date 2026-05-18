@@ -136,14 +136,27 @@ async function postAction(url, body) {
 		</li>`;
 
 		// Render the announced agent roster as nested sub-rows so the
-		// user can see who's running on the remote glon.
+		// user can see who's running on the remote glon. Each remote agent
+		// has its own /peer record (created by /directory on announce);
+		// the chat button opens that record in the inspector where the
+		// peer-chat pane is wired.
 		const remoteAgents = Array.isArray(p.agents) ? p.agents : [];
+		const remoteAgentPeers = Array.isArray(p.remote_agent_peers) ? p.remote_agent_peers : [];
+		const peerIdByAgentId = new Map();
+		for (const rp of remoteAgentPeers) {
+			if (rp?.agent_id_remote && rp.id) peerIdByAgentId.set(rp.agent_id_remote, rp.id);
+		}
 		const agentSubRows = remoteAgents.map((a) => {
 			const aName = (a.name || "(unnamed)").replace(/[<>&]/g, "");
 			const aSuffix = (a.id || "").slice(0, 8);
+			const subPeerId = peerIdByAgentId.get(a.id);
+			const subAction = (trustLevel === "trusted" && subPeerId)
+				? `<button class="network-action" data-action="chat" data-peer-id="${subPeerId}">chat</button>`
+				: "";
 			return `<li class="network-row remote-agent ${trustClass(trustLevel)}">
 				<span class="network-dot"></span>
 				<span class="network-name" title="${a.id || ""}">${aName}<span class="peer-suffix">·${aSuffix}</span></span>
+				${subAction}
 			</li>`;
 		}).join("");
 

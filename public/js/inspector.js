@@ -48,6 +48,14 @@
 		peersList: document.getElementById("insp-peers-list"),
 		peersEmpty: document.getElementById("insp-peers-empty"),
 		peersCount: document.getElementById("insp-peers-count"),
+		// Peer chat (human-to-peer thread, shown when inspecting a peer object)
+		peerChatSection: document.getElementById("insp-peer-chat-section"),
+		peerChatTitle: document.getElementById("insp-peer-chat-title"),
+		peerChatHistory: document.getElementById("insp-peer-chat-history"),
+		peerChatForm: document.getElementById("insp-peer-chat-form"),
+		peerChatInput: document.getElementById("insp-peer-chat-input"),
+		peerChatSend: document.getElementById("insp-peer-chat-send"),
+		peerChatStatus: document.getElementById("insp-peer-chat-status"),
 	};
 
 	// Wire up Planet Forge once
@@ -154,17 +162,23 @@ export async function showObject(id) {
 		fetch(`/api/objects/${id}/changes`).then((r) => r.json()),
 	]);
 	render(detail, changes);
-	// If this is an agent, start the in-inspector chat + peer-chat polling.
-	if (detail?.object?.typeKey === "agent") {
-		startAgentChatBindings(detail.object);
+	const obj = detail?.object;
+	if (obj?.typeKey === "agent") {
+		startAgentChatBindings(obj);
+		stopPeerChatBindings();
+	} else if (obj?.typeKey === "peer") {
+		stopAgentChatBindings();
+		startPeerChatBindings(obj);
 	} else {
 		stopAgentChatBindings();
+		stopPeerChatBindings();
 	}
 }
 
 export function clear() {
 	currentId = null;
 	stopAgentChatBindings();
+	stopPeerChatBindings();
 	els.empty.hidden = false;
 	els.content.hidden = true;
 }
@@ -182,6 +196,7 @@ export function showDaemonTask(task) {
 
 	// Hide object-specific sections
 	els.agentSection.hidden = true;
+	if (els.peerChatSection) els.peerChatSection.hidden = true;
 	els.scalarsSection.hidden = true;
 	els.linksSection.hidden = true;
 	els.styleSection.hidden = true;
@@ -212,6 +227,9 @@ function render(detail, changesResponse) {
 	const obj = detail.object;
 	els.empty.hidden = true;
 	els.content.hidden = false;
+	// Peer chat is shown only by startPeerChatBindings; default to hidden
+	// so it doesn't carry over from a previously-inspected peer.
+	if (els.peerChatSection) els.peerChatSection.hidden = true;
 
 	// Header ------------------------------------------------------
 	const { hex } = colorForType(obj.typeKey);
@@ -728,4 +746,141 @@ function truncate(s, n) {
 	if (!s) return "";
 	const str = String(s);
 	return str.length > n ? str.slice(0, n - 1) + "…" : str;
+}
+
+// ── Peer chat (human-to-peer thread, inspector pane) ──────────────────
+//
+// Shown when the inspected object is a /peer record for a remote host
+// (kind=human) or a remote agent (kind=agent + agent_id_remote). Single
+// flat thread between this glon's principal and the selected peer.
+// Polls every PEER_CHAT_POLL_MS while the inspector is showing this peer.
+
+const PEER_CHAT_POLL_MS = 2_000;
+let peerChatPollHandle = null;
+let peerChatPeerId = null;
+let peerChatPeerName = null;
+let peerChatFormWired = false;
+let lastPeerChatRender = "";
+
+function wirePeerChatFormOnce() {
+	if (peerChatFormWired) return;
+	peerChatFormWired = true;
+	if (!els.peerChatForm) return;
+	els.peerChatForm.addEventListener("submit", async (e) => {
+		e.preventDefault();
+		if (!peerChatPeerId) return;
+		const text = els.peerChatInput.value.trim();
+		if (!text) return;
+		els.peerChatInput.value = "";
+		els.peerChatInput.disabled = true;
+		els.peerChatSend.disabled = true;
+		els.peerChatStatus.textContent = "sending…";
+		try {
+			// Look up an existing active conversation; if there is one,
+			// continue it. Otherwise start a fresh one with a default goal.
+			const conv = await findActivePeerConvo(peerChatPeerId);
+			if (conv) {
+				const r = await fetch("/api/peer-chat/send", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ conversation_id: conv.id, text }),
+				});
+				const data = await r.json().catch(() => null);
+				if (!r.ok || data?.ok === false) throw new Error(data?.error ?? `HTTP ${r.status}`);
+			} else {
+				const r = await fetch("/api/peer-chat/start", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						peer_id: peerChatPeerId,
+						goal: `chat with ${peerChatPeerName ?? "peer"}`,
+						text,
+					}),
+				});
+				const data = await r.json().catch(() => null);
+				if (!r.ok || data?.ok === false) throw new Error(data?.error ?? `HTTP ${r.status}`);
+			}
+			els.peerChatStatus.textContent = "";
+		} catch (err) {
+			els.peerChatStatus.textContent = `failed: ${err?.message ?? String(err)}`;
+		} finally {
+			els.peerChatInput.disabled = false;
+			els.peerChatSend.disabled = false;
+			els.peerChatInput.focus();
+			lastPeerChatRender = "";
+			pollPeerChat();
+		}
+	});
+}
+
+export function startPeerChatBindings(peerObject) {
+	wirePeerChatFormOnce();
+	if (!els.peerChatSection) return;
+	const scalars = peerObject?.scalars ?? {};
+	const trust = String(scalars.trust_level ?? "");
+	const kind = String(scalars.kind ?? "");
+	const identity = String(scalars.identity_pubkey ?? "");
+	// Self + local-agent peers shouldn't get this pane (you can't chat with
+	// yourself, and local agents have the agent-section chat).
+	if (kind === "self") { stopPeerChatBindings(); return; }
+	if (identity.startsWith("local:")) { stopPeerChatBindings(); return; }
+	// Show only when peered (trust verified by trusted/family/friend).
+	const peeredLevels = new Set(["trusted", "family", "friend"]);
+	if (!peeredLevels.has(trust)) { stopPeerChatBindings(); return; }
+
+	peerChatPeerId = peerObject.id;
+	peerChatPeerName = peerObject?.name ?? String(scalars.display_name ?? "peer");
+	if (els.peerChatTitle) {
+		const label = kind === "agent" ? `Chat — agent` : `Chat — host`;
+		els.peerChatTitle.textContent = label;
+	}
+	if (els.peerChatInput) {
+		els.peerChatInput.placeholder = `Message ${peerChatPeerName}…`;
+	}
+	els.peerChatHistory.innerHTML = "";
+	els.peerChatStatus.textContent = "";
+	els.peerChatSection.hidden = false;
+	lastPeerChatRender = "";
+	pollPeerChat();
+	peerChatPollHandle = setInterval(pollPeerChat, PEER_CHAT_POLL_MS);
+}
+
+export function stopPeerChatBindings() {
+	if (peerChatPollHandle) {
+		clearInterval(peerChatPollHandle);
+		peerChatPollHandle = null;
+	}
+	peerChatPeerId = null;
+	peerChatPeerName = null;
+	if (els.peerChatSection) els.peerChatSection.hidden = true;
+}
+
+async function findActivePeerConvo(peerId) {
+	try {
+		const r = await fetch("/api/peer-chat/conversations").then((res) => res.json());
+		const list = Array.isArray(r?.conversations) ? r.conversations : [];
+		return list.find((c) => c.peer_object_id === peerId && c.status === "active") ?? null;
+	} catch { return null; }
+}
+
+async function pollPeerChat() {
+	const peerId = peerChatPeerId;
+	if (!peerId) return;
+	try {
+		const r = await fetch(`/api/peer-chat/messages?peer_id=${encodeURIComponent(peerId)}`).then((res) => res.json());
+		const messages = Array.isArray(r?.messages) ? r.messages : [];
+		const html = messages.map((m) => {
+			const dir = m.direction === "out" ? "out" : "in";
+			const body = m.kind === "text" ? escapeHtml(String(m.body ?? "")) : `<em>(${escapeHtml(m.kind)})</em>`;
+			const when = m.sent_at ? formatTime(m.sent_at) : "";
+			return `<li class="chat-msg ${dir}"><span class="msg-body">${body}</span><span class="msg-time muted small">${when}</span></li>`;
+		}).join("");
+		if (html !== lastPeerChatRender) {
+			els.peerChatHistory.innerHTML = html;
+			lastPeerChatRender = html;
+			els.peerChatHistory.scrollTop = els.peerChatHistory.scrollHeight;
+		}
+	} catch (err) {
+		// Silent — transient backend errors shouldn't spam the user.
+	}
 }
