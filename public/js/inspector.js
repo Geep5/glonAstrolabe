@@ -459,6 +459,73 @@ function escapeHtml(s) {
 	return s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c]));
 }
 
+// Tiny markdown → HTML for chat bubbles. Handles the common chat patterns:
+// fenced code blocks, inline code, bold, italic, links, bullet/numbered
+// lists, and headings. Everything outside markdown markers is HTML-escaped
+// first, so untrusted peer content can't inject script tags. Preserves
+// surrounding whitespace (CSS `white-space: pre-wrap` handles plain
+// newlines), so don't auto-convert `\n` to `<br>` here.
+function renderMarkdown(raw) {
+	if (raw == null) return "";
+	let s = String(raw);
+
+	// Stash fenced code blocks first so their contents are immune to the
+	// inline transforms below. We escape inside the placeholder restore.
+	const blocks = [];
+	s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+		const langClass = lang ? ` class="lang-${escapeHtml(lang)}"` : "";
+		blocks.push(`<pre><code${langClass}>${escapeHtml(code.replace(/\n$/, ""))}</code></pre>`);
+		return `@@CODE${blocks.length - 1}@@`;
+	});
+
+	// Stash inline code spans too — same reason.
+	const inlines = [];
+	s = s.replace(/`([^`\n]+)`/g, (_, code) => {
+		inlines.push(`<code>${escapeHtml(code)}</code>`);
+		return `@@INLINE${inlines.length - 1}@@`;
+	});
+
+	// Everything else: HTML-escape, then run inline transforms.
+	s = escapeHtml(s);
+
+	// Headings (anchored to line start). Cap at h3 so chat bubbles don't
+	// dominate the inspector with giant text.
+	s = s.replace(/^### (.+)$/gm, "<h4>$1</h4>");
+	s = s.replace(/^## (.+)$/gm, "<h3>$1</h3>");
+	s = s.replace(/^# (.+)$/gm, "<h3>$1</h3>");
+
+	// Bullet and numbered lists — group consecutive list lines into one ul/ol.
+	s = s.replace(/(^|\n)((?:[-*] .+(?:\n|$))+)/g, (_, prefix, group) => {
+		const items = group.trim().split("\n")
+			.map((l) => l.replace(/^[-*] /, ""))
+			.map((t) => `<li>${t}</li>`)
+			.join("");
+		return `${prefix}<ul>${items}</ul>`;
+	});
+	s = s.replace(/(^|\n)((?:\d+\. .+(?:\n|$))+)/g, (_, prefix, group) => {
+		const items = group.trim().split("\n")
+			.map((l) => l.replace(/^\d+\. /, ""))
+			.map((t) => `<li>${t}</li>`)
+			.join("");
+		return `${prefix}<ol>${items}</ol>`;
+	});
+
+	// Bold then italic (order matters — bold uses ** which contains *).
+	s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+	s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+
+	// Links: [text](url). Allow http/https/mailto schemes only; others fall
+	// through as literal text to avoid javascript: / data: URI injection.
+	s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
+		'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+	// Restore stashed code spans.
+	s = s.replace(/@@INLINE(\d+)@@/g, (_, idx) => inlines[+idx] ?? "");
+	s = s.replace(/@@CODE(\d+)@@/g, (_, idx) => blocks[+idx] ?? "");
+
+	return s;
+}
+
 // ── In-inspector agent chat + peer-chats ──────────────────────────
 //
 // When an agent is selected, two tabs appear inside the inspector:
@@ -595,10 +662,10 @@ async function refreshChatPane(id) {
 		);
 		const html = visible.map((b) => {
 			if (b.kind === "user_text") {
-				return `<li class="user"><span class="role">you</span>${escapeHtml(b.text ?? "")}</li>`;
+				return `<li class="user"><span class="role">you</span><div class="md">${renderMarkdown(b.text ?? "")}</div></li>`;
 			}
 			if (b.kind === "assistant_text") {
-				return `<li class="assistant"><span class="role">${escapeHtml(b.agentName ?? "agent")}</span>${escapeHtml(b.text ?? "")}</li>`;
+				return `<li class="assistant"><span class="role">${escapeHtml(b.agentName ?? "agent")}</span><div class="md">${renderMarkdown(b.text ?? "")}</div></li>`;
 			}
 			if (b.kind === "tool_use") {
 				const name = b.toolName ?? "tool";
@@ -886,9 +953,11 @@ async function pollPeerChat() {
 		const messages = Array.isArray(r?.messages) ? r.messages : [];
 		const html = messages.map((m) => {
 			const dir = m.direction === "out" ? "out" : "in";
-			const body = m.kind === "text" ? escapeHtml(String(m.body ?? "")) : `<em>(${escapeHtml(m.kind)})</em>`;
+			const body = m.kind === "text"
+				? `<div class="md">${renderMarkdown(String(m.body ?? ""))}</div>`
+				: `<em>(${escapeHtml(m.kind)})</em>`;
 			const when = m.sent_at ? formatTime(m.sent_at) : "";
-			return `<li class="chat-msg ${dir}"><span class="msg-body">${body}</span><span class="msg-time muted small">${when}</span></li>`;
+			return `<li class="chat-msg ${dir}">${body}<span class="msg-time muted small">${when}</span></li>`;
 		}).join("");
 		if (html !== lastPeerChatRender) {
 			els.peerChatHistory.innerHTML = html;
