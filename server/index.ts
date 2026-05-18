@@ -121,19 +121,26 @@ app.get("/api/network/peers", async (_req, res) => {
 		const peers = await dispatchToDaemon("/directory", "listDiscovered", []);
 		const peerList = await dispatchToDaemon("/peer", "list", []);
 		console.log(`[GET /api/network/peers] discovered ${peers?.length ?? 0} peers, ${peerList?.length ?? 0} in list`);
-		const trustMap = new Map();
+		// Index /peer records by every key the discovered-peer side might
+		// know — identity_pubkey, hyperswarm_pubkey, display_name — so the
+		// merge succeeds even before a peer has bootstrapped its wallet
+		// (identity empty) or when two peers happen to share a name.
+		const trustMap = new Map<string, string>();
+		const setBest = (key: string | undefined, level: string | undefined) => {
+			if (!key || !level) return;
+			const k = key.toLowerCase();
+			const existing = trustMap.get(k);
+			if (!existing || existing !== "trusted") trustMap.set(k, level);
+		};
 		for (const p of peerList || []) {
-			const key = (p.identity_pubkey || p.display_name || "").toLowerCase();
-			if (!key) continue;
-			const existing = trustMap.get(key);
-			// Only override if current is not already trusted.
-			if (!existing || existing !== "trusted") {
-				trustMap.set(key, p.trust_level);
-			}
+			setBest(p.identity_pubkey, p.trust_level);
+			setBest(p.hyperswarm_pubkey, p.trust_level);
+			setBest(p.display_name, p.trust_level);
 		}
 		const merged = (peers || []).map((p: any) => ({
 			...p,
 			trust_level: trustMap.get((p.identity_pubkey || "").toLowerCase())
+				|| trustMap.get((p.hyperswarm_pubkey || "").toLowerCase())
 				|| trustMap.get((p.agent_name || "").toLowerCase())
 				|| (p.peer_object_id ? "trusted" : "discovered"),
 		}));

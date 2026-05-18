@@ -1,15 +1,10 @@
 // Network panel — Hyperswarm-discovered peers + peer-request approvals.
 //
-// Polls /api/network/{status,peers,requests} every NETWORK_POLL_MS,
-// renders to #network-list and #network-requests, wires "Peer with",
-// "Accept", "Decline", and "Chat" buttons to the matching endpoints.
-
-// peer-chat overlay was folded into the inspector; the "chat" action on
-// network rows now selects the peer's object so its inspector opens with
-// the Peer chats tab populated.
-// Agent chat moved into the inspector; the agent-chat action now just
-// navigates the cosmos selection so the inspector opens with that agent.
-// Imported lazily to avoid a hard dep on main.js.
+// Shows remote glons only. Each peer is rendered as a "host" row (the
+// human principal, addressable via the inspector's Peer chats tab) with
+// the glon's announced agent roster as indented sub-rows underneath.
+// Your own local agents are NOT shown here — they live in the cosmos /
+// inspector. Polls /api/network/{status,peers,requests} every POLL_MS.
 
 const POLL_MS = 5_000;
 const NETWORK_LIST = document.getElementById("network-list");
@@ -54,19 +49,16 @@ async function postAction(url, body) {
 		let status = null;
 		let peers = [];
 		let requests = [];
-		let agents = [];
 		let unreachable = false;
 		try {
-			const [s, p, r, a] = await Promise.all([
+			const [s, p, r] = await Promise.all([
 				fetch("/api/network/status").then((res) => res.json()),
 				fetch("/api/network/peers").then((res) => res.json()),
 				fetch("/api/network/requests").then((res) => res.json()),
-				fetch("/api/agents").then((res) => res.json()),
 			]);
 			status = s?.status ?? null;
 			peers = Array.isArray(p?.peers) ? p.peers : [];
 			requests = Array.isArray(r?.requests) ? r.requests : [];
-			agents = Array.isArray(a?.agents) ? a.agents : [];
 		} catch {
 			unreachable = true;
 		}
@@ -94,16 +86,16 @@ async function postAction(url, body) {
 
 	// "You" row pinned at the top so users can see at a glance whether
 	// they're announcing themselves into the directory (i.e. discoverable).
+	// Represents the human principal of this glon — not any specific agent.
 	const self = status?.self;
 	const selfRow = self?.hyperswarm_pubkey ? (() => {
-		const name = (self.agent_name || "you").replace(/[<>&]/g, "");
 		const id = shortKey(self.identity_pubkey || self.hyperswarm_pubkey);
 		const suffix = peerSuffix(self.identity_pubkey, self.hyperswarm_pubkey);
 		const announcing = !!self.is_announcing;
 		const stateLabel = announcing ? "discoverable" : "(not announcing yet)";
 		return `<li class="network-row self">
 			<span class="network-dot ${announcing ? "live" : ""}"></span>
-			<span class="network-name" title="${id}">${name}<span class="peer-suffix">·${suffix}</span> <span class="self-tag">you</span></span>
+			<span class="network-name" title="${id}">you<span class="peer-suffix">·${suffix}</span></span>
 			<span class="network-action muted" title="hyperswarm pubkey ${id}">${stateLabel}</span>
 		</li>`;
 	})() : "";
@@ -117,44 +109,49 @@ async function postAction(url, body) {
 			.map((q) => (q.peer_hyperswarm_pubkey || "").toLowerCase())
 	);
 
+	// Each discovered peer is a remote glon → one "host" row (the human
+	// principal, addressable for human-to-human chat) plus one indented
+	// sub-row per agent on that glon (informational; agent chat happens
+	// from the cosmos by clicking the agent's ball).
 	const rows = peers.map((p) => {
 		// Trust level comes from /peer program via API merge.
 		const trustLevel = p.trust_level || (p.peer_object_id ? "trusted" : "discovered");
-		const name = (p.agent_name || "(unnamed)").replace(/[<>&]/g, "");
 		const id = shortKey(p.identity_pubkey || p.hyperswarm_pubkey);
 		const suffix = peerSuffix(p.identity_pubkey, p.hyperswarm_pubkey);
 		const hpLower = (p.hyperswarm_pubkey || "").toLowerCase();
 		let action;
 		if (trustLevel === "trusted") {
-			// Peered → button opens chat. Click handled in bindClicks via
-			// data-action="chat"; the row itself is also clickable to make
-			// the affordance feel less hidden.
-			action = `<button class="network-action" data-action="chat" data-identity="${p.identity_pubkey ?? ""}" data-name="${name}">chat</button>`;
+			// Peered → chat opens the host (principal) in the inspector,
+			// where the Peer chats tab handles human-to-human messaging.
+			action = `<button class="network-action" data-action="chat" data-peer-id="${p.peer_object_id ?? ""}" data-identity="${p.identity_pubkey ?? ""}">chat</button>`;
 		} else if (outgoingPending.has(hpLower)) {
 			action = `<button class="network-action muted" disabled>sent · waiting</button>`;
 		} else {
 			action = `<button class="network-action" data-action="peer" data-hyperswarm="${p.hyperswarm_pubkey}" data-identity="${p.identity_pubkey ?? ""}">peer with</button>`;
 		}
-		return `<li class="network-row ${trustClass(trustLevel)}">
+		const hostRow = `<li class="network-row ${trustClass(trustLevel)}">
 			<span class="network-dot"></span>
-			<span class="network-name" title="${id}">${name}<span class="peer-suffix">·${suffix}</span></span>
+			<span class="network-name" title="${id}">host<span class="peer-suffix">·${suffix}</span></span>
 			${action}
 		</li>`;
+
+		// Render the announced agent roster as nested sub-rows so the
+		// user can see who's running on the remote glon.
+		const remoteAgents = Array.isArray(p.agents) ? p.agents : [];
+		const agentSubRows = remoteAgents.map((a) => {
+			const aName = (a.name || "(unnamed)").replace(/[<>&]/g, "");
+			const aSuffix = (a.id || "").slice(0, 8);
+			return `<li class="network-row remote-agent ${trustClass(trustLevel)}">
+				<span class="network-dot"></span>
+				<span class="network-name" title="${a.id || ""}">${aName}<span class="peer-suffix">·${aSuffix}</span></span>
+			</li>`;
+		}).join("");
+
+		return hostRow + agentSubRows;
 	}).join("");
 
-	// Local agents (e.g. Graice) — always chat-able.
-	const agentRows = agents.map((a) => {
-		const name = (a.name || "(unnamed)").replace(/[<>&]/g, "");
-		const id = shortKey(a.id);
-		return `<li class="network-row local">
-			<span class="network-dot live"></span>
-			<span class="network-name" title="${a.id}">${name}<span class="peer-suffix">·${id}</span></span>
-			<button class="network-action" data-action="agent-chat" data-agent-id="${a.id}" data-name="${name}">chat</button>
-		</li>`;
-	}).join("");
-
-	NETWORK_LIST.innerHTML = selfRow + agentRows + rows;
-	NETWORK_COUNT.textContent = (peers.length + agents.length) ? String(peers.length + agents.length) : "";
+	NETWORK_LIST.innerHTML = selfRow + rows;
+	NETWORK_COUNT.textContent = peers.length ? String(peers.length) : "";
 
 	if (unreachable) {
 		NETWORK_STATUS.textContent = "swarm offline (start daemon with GLON_SWARM=1)";
@@ -199,14 +196,12 @@ function bindClicks() {
 				await postAction(`/api/network/requests/${encodeURIComponent(btn.dataset.id)}/decline`);
 				setTimeout(refresh, 250);
 			} else if (action === "chat") {
-				// Open this peer in the inspector; user can switch to the
-				// Peer chats tab to see / continue their conversation.
-				try { window.glonSelectObject?.(btn.dataset.peerId); } catch {}
-				btn.disabled = false;
-			} else if (action === "agent-chat") {
-				// Tell main.js's cosmos to select this agent. The inspector
-				// will open with the Chat tab populated.
-				try { window.glonSelectObject?.(btn.dataset.agentId); } catch {}
+				// Open this host (peer) in the inspector; user switches to
+				// the Peer chats tab for human-to-human messaging.
+				const peerId = btn.dataset.peerId;
+				if (peerId) {
+					try { window.glonSelectObject?.(peerId); } catch {}
+				}
 				btn.disabled = false;
 			}
 		} catch (err) {
