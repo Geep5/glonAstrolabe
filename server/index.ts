@@ -215,6 +215,35 @@ app.post("/api/network/peer", async (req, res) => {
 	}
 });
 
+// Forget a peer: remove its /peer record AND any kind=agent records that
+// pointed at it via host_peer_id (orphaned remote-agent rows). Useful for
+// pruning stale testing peers after repeated resets on the other side.
+app.post("/api/network/peers/:id/forget", async (req, res) => {
+	const hostId = req.params.id;
+	if (!hostId) return res.status(400).json({ ok: false, error: "peer id required" });
+	try {
+		const peerList = await dispatchToDaemon("/peer", "list", []) as any[];
+		const targets = [hostId];
+		// Sweep up remote-agent records that belong to this host so the
+		// network panel doesn't keep showing orphaned agent sub-rows.
+		for (const p of peerList || []) {
+			if (p?.kind === "agent" && p?.host_peer_id === hostId) targets.push(p.id);
+		}
+		const removed: string[] = [];
+		for (const id of targets) {
+			try {
+				await dispatchToDaemon("/peer", "remove", [{ peer_id: id }]);
+				removed.push(id);
+			} catch (err: any) {
+				console.log(`[forget] failed to remove ${id}: ${err?.message ?? err}`);
+			}
+		}
+		res.json({ ok: true, removed });
+	} catch (err: any) {
+		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
+	}
+});
+
 app.post("/api/network/requests/:id/accept", async (req, res) => {
 	try {
 		const result = await dispatchToDaemon("/directory", "acceptRequest", [{ request_id: req.params.id }]);

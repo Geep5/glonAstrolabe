@@ -155,9 +155,17 @@ async function postAction(url, body) {
 		} else {
 			action = `<button class="network-action" data-action="peer" data-hyperswarm="${p.hyperswarm_pubkey}" data-identity="${p.identity_pubkey ?? ""}">peer with</button>`;
 		}
+		// Every host row gets a small "×" forget button so the user can
+		// prune orphaned peers — useful immediately after the other side
+		// resets and announces under a fresh identity (the old record can
+		// linger up to DIRECTORY_PRESENCE_TTL_S as "online" before timing
+		// out). Confirm dialog gates accidental clicks.
+		const forgetBtn = p.peer_object_id
+			? ` <button class="network-forget" data-peer-id="${p.peer_object_id}" title="Forget this peer (and its agents)">×</button>`
+			: "";
 		const hostRow = `<li class="network-row ${trustClass(trustLevel)} ${offlineClass}">
 			<span class="network-dot"></span>
-			<span class="network-name" title="${id}">host<span class="peer-suffix">·${suffix}</span>${stateLabel}</span>
+			<span class="network-name" title="${id}">host<span class="peer-suffix">·${suffix}</span>${stateLabel}${forgetBtn}</span>
 			${action}
 		</li>`;
 
@@ -207,6 +215,23 @@ async function postAction(url, body) {
 
 function bindClicks() {
 	const handler = async (e) => {
+		// Forget buttons are styled differently; check first so they don't
+		// fall through into the .network-action handler.
+		const forgetBtn = e.target.closest("button.network-forget");
+		if (forgetBtn) {
+			const peerId = forgetBtn.dataset.peerId;
+			if (!peerId) return;
+			if (!confirm("Forget this peer and any of its agents? You can re-peer later if they come back.")) return;
+			forgetBtn.disabled = true;
+			try {
+				await postAction(`/api/network/peers/${encodeURIComponent(peerId)}/forget`);
+				setTimeout(refresh, 250);
+			} catch (err) {
+				console.warn("[network] forget failed:", err?.message ?? err);
+				forgetBtn.disabled = false;
+			}
+			return;
+		}
 		const btn = e.target.closest("button.network-action");
 		if (!btn || btn.disabled) return;
 		const action = btn.dataset.action;

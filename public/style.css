@@ -1382,6 +1382,28 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	color: var(--text-muted);
 	letter-spacing: 0.04em;
 }
+.network-forget {
+	margin-left: 6px;
+	padding: 0;
+	width: 16px;
+	height: 16px;
+	line-height: 14px;
+	border-radius: 4px;
+	border: 1px solid transparent;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: 14px;
+	cursor: pointer;
+	vertical-align: middle;
+	opacity: 0.5;
+}
+.network-forget:hover {
+	background: rgba(244, 63, 94, 0.15);
+	border-color: rgba(244, 63, 94, 0.35);
+	color: #f87171;
+	opacity: 1;
+}
+.network-forget:disabled { opacity: 0.3; cursor: default; }
 
 /* Self-peer "Your conversations" inbox rows */
 .insp-self-chats-list { list-style: none; margin: 0; padding: 0; }
