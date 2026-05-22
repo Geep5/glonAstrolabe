@@ -36,30 +36,16 @@
 		forgeKey: document.getElementById("insp-forge-key"),
 		forgeKeySave: document.getElementById("insp-forge-key-save"),
 		stats: document.getElementById("stats"),
-		// Agent tab UI
-		agentTabs: document.getElementById("insp-agent-tabs"),
+		// Discord-link containers. Astrolabe is no longer a chat client —
+		// the chat lives in the agents' Discord guild. We just render
+		// deep links into the right thread/channel here.
 		paneChat: document.getElementById("insp-pane-chat"),
-		panePeers: document.getElementById("insp-pane-peers"),
-		chatHistory: document.getElementById("insp-chat-history"),
-		chatForm: document.getElementById("insp-chat-form"),
-		chatInput: document.getElementById("insp-chat-input"),
-		chatSend: document.getElementById("insp-chat-send"),
-		chatStatus: document.getElementById("insp-chat-status"),
-		peersList: document.getElementById("insp-peers-list"),
-		peersEmpty: document.getElementById("insp-peers-empty"),
-		peersCount: document.getElementById("insp-peers-count"),
-		// Peer chat (human-to-peer thread, shown when inspecting a peer object)
+		chatLinks: document.getElementById("insp-chat-links"),
 		peerChatSection: document.getElementById("insp-peer-chat-section"),
 		peerChatTitle: document.getElementById("insp-peer-chat-title"),
-		peerChatHistory: document.getElementById("insp-peer-chat-history"),
-		peerChatForm: document.getElementById("insp-peer-chat-form"),
-		peerChatInput: document.getElementById("insp-peer-chat-input"),
-		peerChatSend: document.getElementById("insp-peer-chat-send"),
-		peerChatStatus: document.getElementById("insp-peer-chat-status"),
-		// Self-peer inbox (shown when inspecting the self peer)
+		peerChatLinks: document.getElementById("insp-peer-chat-links"),
 		selfChatsSection: document.getElementById("insp-self-chats-section"),
-		selfChatsList: document.getElementById("insp-self-chats-list"),
-		selfChatsEmpty: document.getElementById("insp-self-chats-empty"),
+		selfChatsLinks: document.getElementById("insp-self-chats-links"),
 	};
 
 	// Wire up Planet Forge once
@@ -526,540 +512,259 @@ function renderMarkdown(raw) {
 	return s;
 }
 
-// ── In-inspector agent chat + peer-chats ──────────────────────────
+// ── Discord link panels ────────────────────────────────────────────
 //
-// When an agent is selected, two tabs appear inside the inspector:
-//   Chat        — the LLM conversation (user_text / assistant_text / tool_use / tool_result)
-//   Peer chats  — A2A conversations this agent has over /peer-chat
-// Both poll every 2s while the inspector is showing this agent. The
-// floating chat-dock from chat.js is gone — chat lives here now.
+// Astrolabe used to embed a chat UI inside the inspector — a Chat tab
+// for talking to the agent, a Peer chats tab for A2A threads, plus
+// floating peer-chat / self-chat panels. All of that has moved to the
+// agents' Discord guild. We just render deep links here.
+//
+// The bindings module exposes the same start*/stop* names that
+// showObject() / clear() call so the dispatch glue above doesn't need
+// changes. start*() populates a links container with Discord-deep-link
+// buttons; stop*() empties the container.
 
-const CHAT_POLL_MS = 2_000;
-let chatPollHandle = null;
-let chatAgentId = null;
-let lastChatRender = "";
-let lastPeersRender = "";
-let chatTabsWired = false;
-let chatFormWired = false;
-let activePane = "chat";
-const expandedPeers = new Set(); // identity_pubkeys currently expanded
-
-function wireChatTabsOnce() {
-	if (chatTabsWired) return;
-	chatTabsWired = true;
-	if (!els.agentTabs) return;
-	for (const btn of els.agentTabs.querySelectorAll(".insp-tab")) {
-		btn.addEventListener("click", () => {
-			activePane = btn.dataset.pane;
-			for (const t of els.agentTabs.querySelectorAll(".insp-tab")) {
-				t.classList.toggle("active", t === btn);
-			}
-			els.paneChat.hidden = activePane !== "chat";
-			els.panePeers.hidden = activePane !== "peers";
-			// Force a fresh paint when switching tabs.
-			if (chatAgentId) {
-				lastChatRender = "";
-				lastPeersRender = "";
-				pollAgentChat();
-			}
-		});
+let discordConfigPromise = null;
+function fetchDiscordConfig() {
+	if (!discordConfigPromise) {
+		discordConfigPromise = fetch("/api/discord/config")
+			.then((r) => r.ok ? r.json() : { guild_id: "", roster_forum_id: "", pair_category_id: "" })
+			.catch(() => ({ guild_id: "", roster_forum_id: "", pair_category_id: "" }));
 	}
+	return discordConfigPromise;
 }
 
-function wireChatFormOnce() {
-	if (chatFormWired) return;
-	chatFormWired = true;
-	if (!els.chatForm) return;
-	els.chatForm.addEventListener("submit", async (e) => {
-		e.preventDefault();
-		if (!chatAgentId) return;
-		const text = els.chatInput.value.trim();
-		if (!text) return;
-		els.chatInput.value = "";
-		els.chatInput.disabled = true;
-		els.chatSend.disabled = true;
-		els.chatStatus.textContent = "sending…";
-		try {
-			const r = await fetch(`/api/agents/${encodeURIComponent(chatAgentId)}/chat`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ message: text }),
-			});
-			const data = await r.json().catch(() => null);
-			if (!r.ok || data?.ok === false) {
-				throw new Error(data?.error ?? `HTTP ${r.status}`);
+function discordChannelUrl(guildId, channelId) {
+	if (!guildId || !channelId) return null;
+	return `https://discord.com/channels/${encodeURIComponent(guildId)}/${encodeURIComponent(channelId)}`;
+}
+
+function discordGuildUrl(guildId) {
+	if (!guildId) return null;
+	return `https://discord.com/channels/${encodeURIComponent(guildId)}`;
+}
+
+function clearChildren(el) {
+	if (!el) return;
+	while (el.firstChild) el.removeChild(el.firstChild);
+}
+
+function buildLinkButton({ label, href, sublabel, disabled = false, hint }) {
+	const wrap = document.createElement("div");
+	wrap.className = "insp-discord-link";
+	if (href && !disabled) {
+		const a = document.createElement("a");
+		a.href = href;
+		a.target = "_blank";
+		a.rel = "noopener noreferrer";
+		a.className = "insp-discord-link-anchor";
+		a.textContent = label;
+		wrap.appendChild(a);
+	} else {
+		const span = document.createElement("span");
+		span.className = "insp-discord-link-anchor muted";
+		span.textContent = label;
+		wrap.appendChild(span);
+	}
+	if (sublabel) {
+		const sub = document.createElement("div");
+		sub.className = "insp-discord-link-sub muted small";
+		sub.textContent = sublabel;
+		wrap.appendChild(sub);
+	}
+	if (hint) {
+		const h = document.createElement("div");
+		h.className = "insp-discord-link-hint muted small";
+		h.textContent = hint;
+		wrap.appendChild(h);
+	}
+	return wrap;
+}
+
+function renderMissingDiscord(container, reason) {
+	clearChildren(container);
+	container.appendChild(buildLinkButton({
+		label: "Discord A2A is not configured",
+		hint: reason ?? "Set GLON_A2A_DISCORD_GUILD and ensure the daemon's Discord bot is online to enable chat links.",
+		disabled: true,
+	}));
+}
+
+// Read a field value off the inspector's object payload. The
+// /api/objects/:id response surfaces scalar fields under `scalars` as
+// plain strings (already unpacked from the proto wrapper).
+function readScalar(obj, key) {
+	if (!obj) return null;
+	const v = obj?.scalars?.[key];
+	if (v == null) return null;
+	if (typeof v === "string") return v;
+	if (typeof v?.stringValue === "string") return v.stringValue;
+	return null;
+}
+
+// ── Agent inspect: roster thread + that agent's A2A threads ─────────
+//
+// We don't filter the peer-chat conversations to "this agent only" —
+// the daemon's /api/peer-chat/conversations endpoint returns every
+// conversation in the actor and lacks an agent-specific filter; we'd
+// need a daemon-side change to scope it. For now we show all
+// conversations and label each one with peer name + goal so the user
+// can pick. Cheap to refine later.
+
+export async function startAgentChatBindings(agentObject) {
+	if (!els.chatLinks) return;
+	const cfg = await fetchDiscordConfig();
+	clearChildren(els.chatLinks);
+
+	if (!cfg.guild_id) {
+		renderMissingDiscord(els.chatLinks);
+		return;
+	}
+
+	const rosterThreadId = readScalar(agentObject, "roster_thread_id");
+	const name = agentObject?.name ?? "this agent";
+	if (rosterThreadId) {
+		els.chatLinks.appendChild(buildLinkButton({
+			label: `💬 Chat with ${name} in Discord →`,
+			href: discordChannelUrl(cfg.guild_id, rosterThreadId),
+			sublabel: `Roster thread`,
+			hint: `Multiple humans can chat with ${name} in the same thread; the bot replies with a ${"`**"}${name}:${"**`"} preamble.`,
+		}));
+	} else {
+		els.chatLinks.appendChild(buildLinkButton({
+			label: `${name} has no roster post yet`,
+			hint: `Re-bootstrap the agent or wait for the next heartbeat tick — a forum post will be created in #roster automatically.`,
+			disabled: true,
+		}));
+	}
+
+	// A2A conversations involving this agent. Best-effort.
+	try {
+		const r = await fetch("/api/peer-chat/conversations");
+		if (r.ok) {
+			const list = await r.json();
+			const convos = Array.isArray(list) ? list : [];
+			const mine = convos.filter((c) => c?.owner_agent_object_id === agentObject?.id);
+			if (mine.length > 0) {
+				const sep = document.createElement("div");
+				sep.className = "insp-discord-link-sep muted small";
+				sep.textContent = "Active A2A conversations:";
+				els.chatLinks.appendChild(sep);
+				for (const c of mine.slice(0, 12)) {
+					const tid = String(c?.conversation_id ?? "");
+					if (!tid) continue;
+					const peerName = c?.peer_display_name ?? "(unknown peer)";
+					const goal = c?.goal ? `"${String(c.goal).slice(0, 60)}"` : "";
+					const status = c?.status ?? "active";
+					els.chatLinks.appendChild(buildLinkButton({
+						label: `→ ${peerName} ${goal ? `· ${goal}` : ""}`,
+						href: discordChannelUrl(cfg.guild_id, tid),
+						sublabel: `${status} · ${c?.message_count ?? 0} msgs`,
+					}));
+				}
 			}
-			els.chatStatus.textContent = "thinking…";
-		} catch (err) {
-			els.chatStatus.textContent = `failed: ${err?.message ?? String(err)}`;
-		} finally {
-			els.chatInput.disabled = false;
-			els.chatSend.disabled = false;
-			els.chatInput.focus();
-			// Force a refresh so the user's message lands immediately.
-			lastChatRender = "";
-			pollAgentChat();
 		}
-	});
-}
-
-export function startAgentChatBindings(agentObject) {
-	wireChatTabsOnce();
-	wireChatFormOnce();
-	const newAgentId = agentObject.id;
-	if (chatAgentId === newAgentId) return;
-	stopAgentChatBindings();
-	chatAgentId = newAgentId;
-	activePane = "chat";
-	for (const t of els.agentTabs.querySelectorAll(".insp-tab")) {
-		t.classList.toggle("active", t.dataset.pane === "chat");
+	} catch {
+		// Silent — peer-chat endpoint may be unreachable.
 	}
-	els.paneChat.hidden = false;
-	els.panePeers.hidden = true;
-	lastChatRender = "";
-	lastPeersRender = "";
-	expandedPeers.clear();
-	els.chatHistory.innerHTML = "";
-	els.peersList.innerHTML = "";
-	els.chatStatus.textContent = "";
-	pollAgentChat();
-	chatPollHandle = setInterval(pollAgentChat, CHAT_POLL_MS);
 }
 
 export function stopAgentChatBindings() {
-	if (chatPollHandle) {
-		clearInterval(chatPollHandle);
-		chatPollHandle = null;
-	}
-	chatAgentId = null;
+	clearChildren(els.chatLinks);
 }
 
-async function pollAgentChat() {
-	const id = chatAgentId;
-	if (!id) return;
-	// Only fetch what we're showing. Chat tab → conversation. Peers tab → peer-chat list.
-	if (activePane === "chat") {
-		await refreshChatPane(id);
-	} else {
-		await refreshPeersPane(id);
-	}
-	// Always refresh the peers count badge so it stays accurate from any tab.
-	refreshPeersCount().catch(() => {});
-}
-
-async function refreshChatPane(id) {
-	try {
-		const r = await fetch(`/api/agents/${encodeURIComponent(id)}/conversation`);
-		if (!r.ok) return;
-		const data = await r.json();
-		const blocks = Array.isArray(data?.blocks) ? data.blocks : [];
-		// Filter to user-visible block kinds; keep tool_use+tool_result as muted rows.
-		const visible = blocks.filter((b) =>
-			b.kind === "user_text" ||
-			b.kind === "assistant_text" ||
-			b.kind === "tool_use" ||
-			b.kind === "tool_result",
-		);
-		const html = visible.map((b) => {
-			if (b.kind === "user_text") {
-				return `<li class="user"><span class="role">you</span><div class="md">${renderMarkdown(b.text ?? "")}</div></li>`;
-			}
-			if (b.kind === "assistant_text") {
-				return `<li class="assistant"><span class="role">${escapeHtml(b.agentName ?? "agent")}</span><div class="md">${renderMarkdown(b.text ?? "")}</div></li>`;
-			}
-			if (b.kind === "tool_use") {
-				const name = b.toolName ?? "tool";
-				const preview = b.input ? `(${truncate(JSON.stringify(b.input), 100)})` : "";
-				return `<li class="tool"><span class="role">tool · ${escapeHtml(name)}</span>${escapeHtml(preview)}</li>`;
-			}
-			if (b.kind === "tool_result") {
-				const err = b.isError ? " · error" : "";
-				return `<li class="tool"><span class="role">result${err}</span>${escapeHtml(truncate(b.content ?? "", 200))}</li>`;
-			}
-			return "";
-		}).join("");
-		if (html !== lastChatRender) {
-			els.chatHistory.innerHTML = html || `<li class="tool" style="text-align:center"><span class="role">empty</span>Say hi to this agent.</li>`;
-			lastChatRender = html;
-			els.chatHistory.scrollTop = els.chatHistory.scrollHeight;
-		}
-		// Clear "thinking…" once a new assistant_text lands after a user_text.
-		if (visible.length > 0 && visible[visible.length - 1].kind === "assistant_text") {
-			els.chatStatus.textContent = "";
-		}
-	} catch { /* swallow polling errors */ }
-}
-
-async function refreshPeersPane(id) {
-	const convos = await fetchAgentConvos(id);
-	const html = convos.map((c) => {
-		const convId = c.conversation_id ?? c.peer_identity_pubkey;
-		const peerName = c.peer_display_name || shortId(c.peer_identity_pubkey ?? "");
-		const lastTs = c.last_message_at ? formatTime(c.last_message_at) : "";
-		const lastPreview = truncate(c.last_message_preview ?? "", 80);
-		const unread = c.unread_count ? ` <span class="muted small">· ${c.unread_count} unread</span>` : "";
-		const isOpen = expandedPeers.has(convId);
-		const status = c.status ?? "active";
-		const statusGlyph = status === "active" ? "●" : status === "done" ? "✓" : "⏸";
-		const statusClass = status === "active" ? "active" : status === "done" ? "done" : "paused";
-		const goal = c.goal ? truncate(c.goal, 80) : "";
-		const meta = [];
-		if (status === "active" && typeof c.hops_remaining === "number") meta.push(`${c.hops_remaining} hops left`);
-		if (c.message_count) meta.push(`${c.message_count} msg${c.message_count === 1 ? "" : "s"}`);
-		if (status === "done" && c.ended_reason) meta.push(`ended: ${truncate(c.ended_reason, 40)}`);
-		if (status === "paused") meta.push(`paused at ${c.message_count} hops`);
-		if (typeof c.resumed_count === "number" && c.resumed_count > 0) meta.push(`resumed ${c.resumed_count}×`);
-		const metaStr = meta.join(" · ");
-		const pauseActions = status === "paused"
-			? `<div class="insp-peer-actions">
-				<button class="insp-peer-btn primary" data-act="resume" data-conv="${escapeHtml(convId)}">Continue</button>
-				<button class="insp-peer-btn ghost"   data-act="end"    data-conv="${escapeHtml(convId)}">End conversation</button>
-			   </div>`
-			: "";
-		return `
-			<li class="insp-peer-li ${statusClass}">
-				<div class="insp-peer-row" data-conv="${escapeHtml(convId)}">
-					<div>
-						<div class="name">
-							<span class="insp-conv-status ${statusClass}" title="${escapeHtml(status)}">${statusGlyph}</span>
-							${escapeHtml(peerName)}${unread}
-						</div>
-						${goal ? `<div class="last"><span class="muted">goal:</span> ${escapeHtml(goal)}</div>` : ""}
-						<div class="last">${escapeHtml(lastPreview)}</div>
-						${metaStr ? `<div class="last muted small">${escapeHtml(metaStr)}</div>` : ""}
-					</div>
-					<div class="when">${escapeHtml(lastTs)}</div>
-				</div>
-				${pauseActions}
-				${isOpen ? `<div class="insp-peer-expand" data-expand="${escapeHtml(convId)}"></div>` : ""}
-			</li>
-		`;
-	}).join("");
-	if (html !== lastPeersRender) {
-		els.peersList.innerHTML = html;
-		lastPeersRender = html;
-		els.peersEmpty.hidden = convos.length > 0;
-		// Re-wire row clicks.
-		for (const row of els.peersList.querySelectorAll(".insp-peer-row")) {
-			row.addEventListener("click", (e) => {
-				if (e.target?.closest?.(".insp-peer-btn")) return; // don't expand when clicking action buttons
-				const cid = row.dataset.conv;
-				if (expandedPeers.has(cid)) expandedPeers.delete(cid);
-				else expandedPeers.add(cid);
-				lastPeersRender = "";
-				refreshPeersPane(id);
-			});
-		}
-		// Pause-state action buttons (Continue / End)
-		for (const btn of els.peersList.querySelectorAll(".insp-peer-btn")) {
-			btn.addEventListener("click", async (e) => {
-				e.stopPropagation();
-				const cid = btn.dataset.conv;
-				const act = btn.dataset.act;
-				btn.disabled = true;
-				try {
-					if (act === "resume") {
-						await fetch("/api/peer-chat/resume", {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ conversation_id: cid }),
-						});
-					} else if (act === "end") {
-						const reason = window.prompt("Reason for ending this conversation?", "user closed via inspector") ?? "user closed";
-						await fetch("/api/peer-chat/end", {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ conversation_id: cid, reason }),
-						});
-					}
-					lastPeersRender = "";
-					await refreshPeersPane(id);
-				} catch (err) {
-					console.warn("[peer-chat]", act, "failed", err);
-					btn.disabled = false;
-				}
-			});
-		}
-	}
-	// Populate any expanded rows with their message list.
-	for (const expandEl of els.peersList.querySelectorAll("[data-expand]")) {
-		const cid = expandEl.getAttribute("data-expand");
-		try {
-			const r = await fetch(`/api/peer-chat/messages?conversation_id=${encodeURIComponent(cid)}`);
-			const data = await r.json();
-			const msgs = Array.isArray(data?.messages) ? data.messages : [];
-			expandEl.innerHTML = msgs.map((m) => {
-				const dir = m.direction === "out" ? "out" : "in";
-				const body = typeof m.body === "string" ? m.body : JSON.stringify(m.body);
-				return `<div class="insp-peer-msg ${dir}"><span class="ts">${escapeHtml(formatTime(m.sent_at))}</span> ${escapeHtml(truncate(body, 400))}</div>`;
-			}).join("") || `<div class="muted small">No messages yet.</div>`;
-		} catch {
-			expandEl.innerHTML = `<div class="muted small">(messages unreachable)</div>`;
-		}
-	}
-}
-
-async function fetchAgentConvos(agentId) {
-	// v2 schema: conversations carry owner_agent_id (which local agent's
-	// perspective this entry is) and peer_identity_pubkey="local:<other>".
-	// Filter to entries OWNED by the current agent — drops the mirror that
-	// belongs to the other agent.
-	try {
-		const r = await fetch("/api/peer-chat/conversations");
-		const data = await r.json();
-		const all = Array.isArray(data?.conversations) ? data.conversations : [];
-		if (!agentId) return all;
-		const ownLocal = `local:${agentId}`.toLowerCase();
-		return all.filter((c) => {
-			// Schema v2: prefer owner_agent_id when present.
-			if (c.owner_agent_id) return c.owner_agent_id === agentId;
-			// Fallback (legacy or cross-machine): drop conversations whose peer IS this agent.
-			return (c.peer_identity_pubkey ?? "").toLowerCase() !== ownLocal;
-		});
-	} catch { return []; }
-}
-
-async function refreshPeersCount() {
-	const convos = await fetchAgentConvos(chatAgentId);
-	if (els.peersCount) els.peersCount.textContent = convos.length > 0 ? `(${convos.length})` : "";
-}
-
-function truncate(s, n) {
-	if (!s) return "";
-	const str = String(s);
-	return str.length > n ? str.slice(0, n - 1) + "…" : str;
-}
-
-// ── Peer chat (human-to-peer thread, inspector pane) ──────────────────
+// ── Peer inspect: link to the pair channel / shared chat ───────────
 //
-// Shown when the inspected object is a /peer record for a remote host
-// (kind=human) or a remote agent (kind=agent + agent_id_remote). Single
-// flat thread between this glon's principal and the selected peer.
-// Polls every PEER_CHAT_POLL_MS while the inspector is showing this peer.
+// For now we link to the guild (Discord will land you at whatever
+// you last had open). A future iteration can call a daemon endpoint
+// that maps peer.agent_uuid → pair_channel_id and link directly.
 
-const PEER_CHAT_POLL_MS = 2_000;
-let peerChatPollHandle = null;
-let peerChatPeerId = null;
-let peerChatPeerName = null;
-let peerChatFormWired = false;
-let lastPeerChatRender = "";
-
-function wirePeerChatFormOnce() {
-	if (peerChatFormWired) return;
-	peerChatFormWired = true;
-	if (!els.peerChatForm) return;
-	els.peerChatForm.addEventListener("submit", async (e) => {
-		e.preventDefault();
-		if (!peerChatPeerId) return;
-		const text = els.peerChatInput.value.trim();
-		if (!text) return;
-		els.peerChatInput.value = "";
-		els.peerChatInput.disabled = true;
-		els.peerChatSend.disabled = true;
-		els.peerChatStatus.textContent = "sending…";
-		try {
-			// Look up an existing active conversation; if there is one,
-			// continue it. Otherwise start a fresh one with a default goal.
-			const conv = await findActivePeerConvo(peerChatPeerId);
-			if (conv) {
-				const r = await fetch("/api/peer-chat/send", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ conversation_id: conv.conversation_id, text }),
-				});
-				const data = await r.json().catch(() => null);
-				if (!r.ok || data?.ok === false) throw new Error(data?.error ?? `HTTP ${r.status}`);
-			} else {
-				const r = await fetch("/api/peer-chat/start", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						peer_id: peerChatPeerId,
-						goal: `chat with ${peerChatPeerName ?? "peer"}`,
-						text,
-					}),
-				});
-				const data = await r.json().catch(() => null);
-				if (!r.ok || data?.ok === false) throw new Error(data?.error ?? `HTTP ${r.status}`);
-			}
-			els.peerChatStatus.textContent = "";
-		} catch (err) {
-			els.peerChatStatus.textContent = `failed: ${err?.message ?? String(err)}`;
-		} finally {
-			els.peerChatInput.disabled = false;
-			els.peerChatSend.disabled = false;
-			els.peerChatInput.focus();
-			lastPeerChatRender = "";
-			pollPeerChat();
-		}
-	});
-}
-
-export function startPeerChatBindings(peerObject) {
-	wirePeerChatFormOnce();
-	if (!els.peerChatSection) return;
-	const scalars = peerObject?.scalars ?? {};
-	const trust = String(scalars.trust_level ?? "");
-	const kind = String(scalars.kind ?? "");
-	const identity = String(scalars.identity_pubkey ?? "");
-	// Self + local-agent peers shouldn't get this pane (you can't chat with
-	// yourself, and local agents have the agent-section chat).
-	if (kind === "self") { stopPeerChatBindings(); return; }
-	if (identity.startsWith("local:")) { stopPeerChatBindings(); return; }
-	// Show only when peered (trust verified by trusted/family/friend).
-	const peeredLevels = new Set(["trusted", "family", "friend"]);
-	if (!peeredLevels.has(trust)) { stopPeerChatBindings(); return; }
-
-	peerChatPeerId = peerObject.id;
-	peerChatPeerName = peerObject?.name ?? String(scalars.display_name ?? "peer");
-	if (els.peerChatTitle) {
-		const label = kind === "agent" ? `Chat — agent` : `Chat — host`;
-		els.peerChatTitle.textContent = label;
-	}
-	if (els.peerChatInput) {
-		els.peerChatInput.placeholder = `Message ${peerChatPeerName}…`;
-	}
-	els.peerChatHistory.innerHTML = "";
-	els.peerChatStatus.textContent = "";
+export async function startPeerChatBindings(peerObject) {
+	if (!els.peerChatSection || !els.peerChatLinks) return;
+	const cfg = await fetchDiscordConfig();
 	els.peerChatSection.hidden = false;
-	lastPeerChatRender = "";
-	pollPeerChat();
-	peerChatPollHandle = setInterval(pollPeerChat, PEER_CHAT_POLL_MS);
+	clearChildren(els.peerChatLinks);
+
+	if (!cfg.guild_id) {
+		renderMissingDiscord(els.peerChatLinks);
+		return;
+	}
+
+	const name = peerObject?.name ?? "this peer";
+	const kind = String(peerObject?.scalars?.kind ?? "");
+	const agentUuid = readScalar(peerObject, "agent_uuid");
+
+	if (kind === "agent" && agentUuid) {
+		// Try to surface the pair channel by sniffing peer-chat conversations
+		// where this peer is the counterpart.
+		let pairChannelId = "";
+		try {
+			const r = await fetch("/api/peer-chat/conversations");
+			if (r.ok) {
+				const list = await r.json();
+				const convos = Array.isArray(list) ? list : [];
+				const match = convos.find((c) =>
+					(c?.peer_agent_uuid ?? "").toLowerCase() === agentUuid.toLowerCase()
+					|| c?.peer_object_id === peerObject?.id);
+				// We don't have the pair channel id directly in conversation
+				// data, but the conversation_id is a thread INSIDE the pair
+				// channel — Discord's UI will let the user navigate to the
+				// channel via the thread.
+				if (match?.conversation_id) pairChannelId = String(match.conversation_id);
+			}
+		} catch { /* fall through */ }
+
+		const href = pairChannelId
+			? discordChannelUrl(cfg.guild_id, pairChannelId)
+			: discordGuildUrl(cfg.guild_id);
+		els.peerChatLinks.appendChild(buildLinkButton({
+			label: `💬 Open chat with ${name} in Discord →`,
+			href,
+			sublabel: pairChannelId ? "Most recent A2A thread" : "Discord guild (navigate to the pair channel)",
+			hint: `Pair channels live under the glon-a2a category. Each A2A conversation is its own thread.`,
+		}));
+	} else {
+		els.peerChatLinks.appendChild(buildLinkButton({
+			label: `Open Discord guild →`,
+			href: discordGuildUrl(cfg.guild_id),
+			sublabel: `${name} is ${kind || "a peer"}; navigate to the appropriate channel.`,
+		}));
+	}
 }
 
 export function stopPeerChatBindings() {
-	if (peerChatPollHandle) {
-		clearInterval(peerChatPollHandle);
-		peerChatPollHandle = null;
-	}
-	peerChatPeerId = null;
-	peerChatPeerName = null;
 	if (els.peerChatSection) els.peerChatSection.hidden = true;
+	clearChildren(els.peerChatLinks);
 }
 
-async function findActivePeerConvo(peerId) {
-	try {
-		const r = await fetch("/api/peer-chat/conversations").then((res) => res.json());
-		const list = Array.isArray(r?.conversations) ? r.conversations : [];
-		return list.find((c) => c.peer_object_id === peerId && c.status === "active") ?? null;
-	} catch { return null; }
-}
+// ── Self peer inspect: link to the roster + guild ───────────────────
 
-async function pollPeerChat() {
-	const peerId = peerChatPeerId;
-	if (!peerId) return;
-	try {
-		const r = await fetch(`/api/peer-chat/messages?peer_id=${encodeURIComponent(peerId)}`).then((res) => res.json());
-		const messages = Array.isArray(r?.messages) ? r.messages : [];
-		const html = messages.map((m) => {
-			const dir = m.direction === "out" ? "out" : "in";
-			const body = m.kind === "text"
-				? `<div class="md">${renderMarkdown(String(m.body ?? ""))}</div>`
-				: `<em>(${escapeHtml(m.kind)})</em>`;
-			const when = m.sent_at ? formatTime(m.sent_at) : "";
-			return `<li class="chat-msg ${dir}">${body}<span class="msg-time muted small">${when}</span></li>`;
-		}).join("");
-		if (html !== lastPeerChatRender) {
-			els.peerChatHistory.innerHTML = html;
-			lastPeerChatRender = html;
-			els.peerChatHistory.scrollTop = els.peerChatHistory.scrollHeight;
-		}
-	} catch (err) {
-		// Silent — transient backend errors shouldn't spam the user.
-	}
-}
-
-// ── Self-peer inbox (your conversations) ──────────────────────────────
-//
-// Shown when inspecting the self peer. Lists every conversation you're a
-// participant in — local-agent LLM threads + peer-chat threads — so the
-// self-peer object becomes a single "what am I talking about?" launcher.
-// Each row navigates the inspector to the relevant agent/peer (no popups,
-// no expand-in-place). Polls every 3s while the self peer is selected.
-
-const SELF_CHATS_POLL_MS = 3_000;
-let selfChatsPollHandle = null;
-let lastSelfChatsRender = "";
-
-export function startSelfChatList(selfPeerObject) {
-	if (!els.selfChatsSection) return;
+export async function startSelfChatList(_selfPeerObject) {
+	if (!els.selfChatsSection || !els.selfChatsLinks) return;
+	const cfg = await fetchDiscordConfig();
 	els.selfChatsSection.hidden = false;
-	els.selfChatsList.innerHTML = "";
-	lastSelfChatsRender = "";
-	pollSelfChats();
-	selfChatsPollHandle = setInterval(pollSelfChats, SELF_CHATS_POLL_MS);
-	wireSelfChatsClicks();
+	clearChildren(els.selfChatsLinks);
+
+	if (!cfg.guild_id) {
+		renderMissingDiscord(els.selfChatsLinks);
+		return;
+	}
+
+	if (cfg.roster_forum_id) {
+		els.selfChatsLinks.appendChild(buildLinkButton({
+			label: `📋 Open #roster (agent directory) →`,
+			href: discordChannelUrl(cfg.guild_id, cfg.roster_forum_id),
+			sublabel: "One forum post per agent; click any to chat",
+		}));
+	}
+	els.selfChatsLinks.appendChild(buildLinkButton({
+		label: `🛰️  Open the glon-a2a guild →`,
+		href: discordGuildUrl(cfg.guild_id),
+		sublabel: "Everything your agents talk about lives here",
+	}));
 }
 
 export function stopSelfChatList() {
-	if (selfChatsPollHandle) {
-		clearInterval(selfChatsPollHandle);
-		selfChatsPollHandle = null;
-	}
 	if (els.selfChatsSection) els.selfChatsSection.hidden = true;
-}
-
-let selfChatsClicksWired = false;
-function wireSelfChatsClicks() {
-	if (selfChatsClicksWired) return;
-	selfChatsClicksWired = true;
-	if (!els.selfChatsList) return;
-	els.selfChatsList.addEventListener("click", (e) => {
-		const row = e.target.closest("[data-target-id]");
-		if (!row) return;
-		const id = row.getAttribute("data-target-id");
-		if (id) {
-			try { window.glonSelectObject?.(id); } catch {}
-		}
-	});
-}
-
-async function pollSelfChats() {
-	try {
-		const [agentsResp, convosResp] = await Promise.all([
-			fetch("/api/agents").then((r) => r.json()),
-			fetch("/api/peer-chat/conversations").then((r) => r.json()),
-		]);
-		const agents = Array.isArray(agentsResp?.agents) ? agentsResp.agents : [];
-		const convos = Array.isArray(convosResp?.conversations) ? convosResp.conversations : [];
-
-		// Local-agent rows. We don't fetch each agent's full LLM thread
-		// here — too heavy for a list view. Just show the agent as a
-		// chat-able entry; clicking opens its inspector where the LLM
-		// conversation is already rendered.
-		const localAgentRows = agents.map((a) => {
-			const name = escapeHtml(a.name ?? "(unnamed)");
-			return `<li class="self-chat-row" data-target-id="${a.id}">
-				<span class="self-chat-name">${name}</span>
-				<span class="self-chat-tag muted small">local agent</span>
-			</li>`;
-		});
-
-		// Peer-chat threads — one row per conversation. Click navigates to
-		// the peer (not the conversation), because chat lives on the peer.
-		const peerConvoRows = convos
-			.slice()
-			.sort((a, b) => (b.last_message_at ?? 0) - (a.last_message_at ?? 0))
-			.map((c) => {
-				const name = escapeHtml(c.peer_display_name ?? "(unnamed)");
-				const preview = escapeHtml(String(c.last_message_preview ?? ""));
-				const when = c.last_message_at ? formatTime(c.last_message_at) : "";
-				const tag = c.peer_identity_pubkey?.startsWith?.("swarm:") ? "remote agent" : "remote host";
-				return `<li class="self-chat-row" data-target-id="${c.peer_object_id}">
-					<span class="self-chat-name">${name}</span>
-					<span class="self-chat-tag muted small">${tag}</span>
-					<span class="self-chat-preview muted small">${preview}</span>
-					<span class="self-chat-when muted small">${when}</span>
-				</li>`;
-			});
-
-		const html = [...localAgentRows, ...peerConvoRows].join("");
-		if (html !== lastSelfChatsRender) {
-			els.selfChatsList.innerHTML = html;
-			lastSelfChatsRender = html;
-		}
-		if (els.selfChatsEmpty) els.selfChatsEmpty.hidden = html.length > 0;
-	} catch (err) {
-		// Silent — transient backend errors shouldn't spam the user.
-	}
+	clearChildren(els.selfChatsLinks);
 }

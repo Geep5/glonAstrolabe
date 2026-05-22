@@ -1,9 +1,10 @@
 # glonAstrolabe
 
 Live 3D dashboard for a **[glon](https://github.com/Geep5/glon)**
-environment. Every object is a planet; clicking an agent opens an
-in-inspector chat; clicking any other ball inspects it. Agent-to-agent
-conversations show up in real time as they happen.
+environment. Every object is a planet; clicking an agent or peer opens
+the inspector with deep-link buttons into the agent's Discord chat
+threads. Agent-to-agent conversations live in Discord — Astrolabe is
+the observatory, not the chat client.
 
 ## What you see
 
@@ -33,19 +34,21 @@ content, change DAG. For agents it also has:
 - **Stats**: model, turn count, tool calls, compactions, tools
   registered, a gradient **context-fill bar** showing how close to
   compaction.
-- **Chat tab**: the LLM conversation. Type into the compose box, watch
-  the agent respond. Tool calls render as muted monospace rows.
-- **Peer chats tab**: this agent's goal-driven A2A conversations.
-  Each entry shows the goal, status (● active / ✓ done / ⏸ paused),
-  hops remaining, and the last message preview. Expand to read the
-  thread. Paused conversations get **Continue** / **End** buttons —
-  the user decides whether agents keep going.
+- **Discord chat links** (was: Chat / Peer chats tabs): a single
+  "💬 Chat with `<Name>` in Discord →" button that opens the agent's
+  `#roster` forum thread, plus a list of active A2A conversation
+  threads (each linking straight to the thread in the pair channel).
+  The chat itself happens entirely in Discord — multi-human, native
+  reply chains, lock-on-done.
 
 **Tasks panel.** Daemon-level recurring tasks + reminders, each with
 an enable/disable toggle.
 
-**Network panel.** Hyperswarm-discovered peers (other glons on the
-same topic), their trust level, and pending peer-request prompts.
+**Network panel.** Discord-discovered peers (other glons listed in the
+shared `#roster` forum), their trust level, and pending peer-request
+prompts. *(Note: the Hyperswarm-based discovery layer was retired in
+glon's Discord-as-substrate refactor; the network panel still shows
+trust state from `/peer`, but discovery now happens via `#roster`.)*
 
 **Search** (top). Live highlight on type/name/id/scalar, plus
 server-side block-text search.
@@ -63,10 +66,13 @@ growth.
 │ └ …                              ↓
 └ …                                /api/state, /api/objects/:id,
                                    /api/agents/:id/conversation,
-                                   /api/peer-chat/*, /api/network/*,
+                                   /api/discord/config (guild id),
+                                   /api/peer-chat/* (read-only),
                                    /api/events (SSE)
                                    ↓
                                    three.js frontend
+                                   ↓ (chat surfaces)
+                                   discord.com/channels/<guild>/...
 ```
 
 Read path has **no dependency on glon running** — it scans the disk
@@ -74,10 +80,18 @@ snapshot on demand and caches for 3 seconds. The SSE watcher
 (`fs.watch` recursive on the changes dir) tails new `.pb` files as
 they land.
 
-Mutation paths — chat with an agent, post a peer message, resume a
-paused conversation — all proxy to the glon daemon's `/dispatch`
-endpoint. If the daemon isn't reachable, calls 503 and the read-only
-viz still works.
+**Chat lives in Discord.** Each agent has a `#roster` forum post for
+human-to-agent messaging, and pair channels under `glon-a2a` for
+agent-to-agent conversation threads. Astrolabe just builds deep links
+into them — `/api/discord/config` returns the guild id (and roster
+forum id) at boot, the frontend assembles
+`https://discord.com/channels/<guild>/<thread>` URLs from each
+object's stored ids. If `GLON_A2A_DISCORD_GUILD` isn't set, the
+inspector shows a disabled "Discord A2A is not configured" tile.
+
+Read-only mutation paths (the few that remain — peer trust changes,
+network requests) still proxy to the glon daemon's `/dispatch`
+endpoint.
 
 ### Server-side filters
 
@@ -124,8 +138,8 @@ GLON_ASTROLABE_DEDUPE=0 GLON_ASTROLABE_JUNK_FILTER=0 npm run dev   # raw mode
 | `scroll` | zoom |
 | `right drag` | pan |
 | `click` a ball | select; inspector opens |
-| `click` an agent ball or top-bar chip | inspector opens with Chat tab pre-loaded |
-| `click` a conversation orb | inspector opens for that peer; Peer chats tab one click away |
+| `click` an agent ball or top-bar chip | inspector opens with the "Chat with `<Name>` in Discord →" button |
+| `click` a conversation orb | inspector opens for that peer; the Discord link below the stats jumps straight to the relevant pair-channel thread |
 | `dbl-click` a ball | focus camera + select |
 | `click` an event row | select the object it touched |
 | `Esc` | clear selection |
@@ -144,14 +158,10 @@ GET  /api/objects/:id/changes                  full Change DAG
 GET  /api/agents                               list of agent objects
 GET  /api/agents/:id/conversation              classified blocks + registered tools
 GET  /api/agents/:id/context                   { agentId, agentName, objectIds }
-POST /api/agents/:id/chat                      ask the agent something
-GET  /api/peer-chat/conversations              all conversations in the daemon's /peer-chat state
-GET  /api/peer-chat/messages?conversation_id=… messages in a specific conversation
-POST /api/peer-chat/send                       send into an active conversation
-POST /api/peer-chat/end                        close a conversation (one-sided)
-POST /api/peer-chat/resume                     resume a paused conversation
-POST /api/peer-chat/mark-read                  reset unread_count
-GET  /api/network/{status,peers,requests}      Hyperswarm-discovered peers + peer-requests
+GET  /api/discord/config                       { guild_id, roster_forum_id, pair_category_id } — frontend builds Discord links from these
+GET  /api/peer-chat/conversations              read-only list of A2A conversations (used to build per-agent Discord link lists)
+GET  /api/peer-chat/messages?conversation_id=… messages in a conversation (read-only fallback)
+GET  /api/network/{status,peers,requests}      legacy network panel; mostly empty post-Hyperswarm-retirement
 POST /api/network/peer                         peer with a discovered node
 POST /api/network/requests/:id/{accept,decline} respond to an incoming peer request
 POST /api/network/announce                     re-broadcast our peer record on the swarm

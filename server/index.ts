@@ -42,6 +42,27 @@ app.get("/api/meta", (_req, res) => {
 	});
 });
 
+// ── Discord A2A bridge config ──────────────────────────────────────
+// Astrolabe no longer runs its own chat UI. Instead it exposes "open in
+// Discord" links pointing into the A2A guild where the agents actually
+// live. The frontend reads this once at boot and builds links from each
+// object's stored thread_id / channel_id.
+app.get("/api/discord/config", async (_req, res) => {
+	const guild_id = process.env.GLON_A2A_DISCORD_GUILD ?? "";
+	let roster_forum_id = "";
+	let pair_category_id = "";
+	if (guild_id) {
+		try {
+			const forum = await dispatchToDaemon("/discord", "ensureRosterForum", []) as any;
+			roster_forum_id = String(forum?.forum_channel_id ?? "");
+			pair_category_id = roster_forum_id ? (await dispatchToDaemon("/discord", "ensurePairCategory", []) as any)?.category_id ?? "" : "";
+		} catch {
+			// Daemon unreachable or /discord not set up — just return the guild.
+		}
+	}
+	res.json({ guild_id, roster_forum_id, pair_category_id });
+});
+
 app.get("/api/state", (_req, res) => {
 	res.json(snapshot());
 });

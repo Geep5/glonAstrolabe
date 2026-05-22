@@ -101,7 +101,7 @@
 			</button>
 		</div>
 		<div class="spell-row">
-			<button class="spell-slot" data-target="inspector"   data-key="6" type="button" title="Inspector (click an agent to chat)">
+			<button class="spell-slot" data-target="inspector"   data-key="6" type="button" title="Inspector (click anything; agent + peer cards include Discord chat links)">
 				<span class="spell-glyph">I</span><span class="spell-key">6</span>
 			</button>
 			<button class="spell-slot" data-target="livelog"     data-key="0" type="button" title="Live log / combat log">
@@ -129,49 +129,29 @@
 			<div class="insp-section" id="insp-agent-section" hidden>
 				<div id="insp-agent-stats" class="kv"></div>
 
-				<!-- Tabs for the in-inspector agent chat surfaces. -->
-				<div class="insp-tabs" id="insp-agent-tabs">
-					<button class="insp-tab active" data-pane="chat" type="button">Chat</button>
-					<button class="insp-tab" data-pane="peers" type="button">Peer chats <span id="insp-peers-count" class="muted small"></span></button>
-				</div>
-
-				<!-- Chat pane: the LLM conversation. -->
+				<!-- Discord chat links replace the old in-app chat panes. Chat
+					 with the agent lives in their #roster forum post; A2A
+					 conversations live as threads in the pair channel between
+					 them and the other agent. Astrolabe is now an observatory,
+					 not a chat client — the Discord guild is the chat. -->
 				<div class="insp-pane" id="insp-pane-chat">
-					<ul id="insp-chat-history" class="insp-chat-history"></ul>
-					<form id="insp-chat-form" class="insp-chat-form" autocomplete="off">
-						<input id="insp-chat-input" type="text" placeholder="Talk to this agent…" maxlength="8000" />
-						<button id="insp-chat-send" type="submit">Send</button>
-					</form>
-					<div id="insp-chat-status" class="insp-chat-status muted small"></div>
-				</div>
-
-				<!-- Peer chats pane: this agent's A2A conversations. -->
-				<div class="insp-pane" id="insp-pane-peers" hidden>
-					<ul id="insp-peers-list" class="insp-peers-list"></ul>
-					<div id="insp-peers-empty" class="muted small">No peer conversations yet. They'll appear here when this agent messages another peer.</div>
+					<div id="insp-chat-links" class="insp-discord-links"></div>
 				</div>
 			</div>
 
-			<!-- Peer chat section: shown when inspecting a trusted remote peer
-				 (host or remote agent). Single thread between you and them. -->
+			<!-- Discord links when inspecting a peer (remote host or remote
+				 agent). Single anchor opening into the appropriate Discord
+				 channel/thread. -->
 			<div class="insp-section" id="insp-peer-chat-section" hidden>
-				<h3 id="insp-peer-chat-title">Chat</h3>
-				<ul id="insp-peer-chat-history" class="insp-chat-history"></ul>
-				<form id="insp-peer-chat-form" class="insp-chat-form" autocomplete="off">
-					<input id="insp-peer-chat-input" type="text" placeholder="Message this peer…" maxlength="8000" />
-					<button id="insp-peer-chat-send" type="submit">Send</button>
-				</form>
-				<div id="insp-peer-chat-status" class="insp-chat-status muted small"></div>
+				<h3 id="insp-peer-chat-title">Chat with this peer</h3>
+				<div id="insp-peer-chat-links" class="insp-discord-links"></div>
 			</div>
 
 			<!-- Self-peer inbox: shown when inspecting your own self peer.
-				 Lists every conversation you're a participant in (local-agent
-				 LLM threads + peer-chats). Each row navigates the inspector
-				 to that agent/peer for the full chat. -->
+				 Now just a deep link into the Discord guild's glon-a2a category. -->
 			<div class="insp-section" id="insp-self-chats-section" hidden>
 				<h3>Your conversations</h3>
-				<ul id="insp-self-chats-list" class="insp-self-chats-list"></ul>
-				<div id="insp-self-chats-empty" class="muted small" hidden>No conversations yet. Click any agent in the cosmos, or any peered host in the network panel.</div>
+				<div id="insp-self-chats-links" class="insp-discord-links"></div>
 			</div>
 
 			<div class="insp-section" id="insp-scalars-section" hidden>

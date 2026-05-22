@@ -562,6 +562,42 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 }
 .insp-pane[hidden] { display: none; }
 
+/* Discord deep-link buttons that replaced the old in-app chat UI. */
+.insp-discord-links {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 4px 0;
+}
+.insp-discord-link {
+	background: color-mix(in oklab, var(--accent, #5865f2) 14%, #161616);
+	border: 1px solid color-mix(in oklab, var(--accent, #5865f2) 35%, #2a2a2a);
+	border-radius: 6px;
+	padding: 10px 12px;
+	transition: background 120ms ease, border-color 120ms ease;
+}
+.insp-discord-link:hover {
+	background: color-mix(in oklab, var(--accent, #5865f2) 22%, #161616);
+	border-color: color-mix(in oklab, var(--accent, #5865f2) 55%, #2a2a2a);
+}
+.insp-discord-link-anchor {
+	display: block;
+	color: var(--text);
+	text-decoration: none;
+	font-weight: 600;
+	font-size: 14px;
+}
+.insp-discord-link-anchor.muted { color: var(--muted, #888); font-weight: 400; cursor: default; }
+.insp-discord-link-anchor:hover:not(.muted) { text-decoration: underline; }
+.insp-discord-link-sub { margin-top: 4px; opacity: 0.85; }
+.insp-discord-link-hint { margin-top: 6px; opacity: 0.7; line-height: 1.35; }
+.insp-discord-link-sep {
+	margin: 14px 0 4px 2px;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.6px;
+}
+
 .insp-chat-history {
 	list-style: none;
 	padding: 0;
