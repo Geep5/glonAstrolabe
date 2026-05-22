@@ -379,10 +379,10 @@ export function buildCosmos(state, materials) {
 	//   Centre               — the local glon, rendered as a visible SUN
 	//   Inner ring (radius 6)— my agents (close-orbit children of the sun)
 	//   Middle ring (24)     — every other DAG primary (programs, memories, etc.)
-	//   Outer ring (44)      — network peers (other glons), as moons or suns
+	//   Outer ring (44)      — remote peers (other glons), as moons or suns
 	//                          depending on trust level
 	//
-	// A "network peer" is a /peer object with an agent_uuid + host_peer_id
+	// A "remote peer" is a /peer object with an agent_uuid + host_peer_id
 	// — i.e. a remote glon agent we've discovered via Discord's #roster
 	// forum, not a local agent or the human self peer. Untrusted peers
 	// render as small dim moons; trusted peers render bigger and brighter
@@ -404,7 +404,7 @@ export function buildCosmos(state, materials) {
 	// to leave room for the agent sphere (radius ~1.3) AND a visible gap
 	// — otherwise the agent looks pinned to the sun's edge.
 	const MIN_INNER_RADIUS = 10;
-	const OUTER_PEER_RADIUS = 44;         // network peers (other glons) — semantic outer band
+	const OUTER_PEER_RADIUS = 44;         // remote peers (other glons) — semantic outer band
 	// "Cosmic void" between my outermost local ring and the peer band.
 	// Peers are conceptually OUTSIDE my ecosystem, so they need a
 	// noticeable gap — not just MIN_RING_GAP — to read as "out there"
@@ -414,9 +414,9 @@ export function buildCosmos(state, materials) {
 	const MIN_ARC_SPACING  = 2.4;         // min tangent distance between adjacent items on a ring
 	const MIN_RING_GAP     = 3.0;         // min radial gap between concentric rings
 
-	// Distinguish a NETWORK peer (a remote glon agent we discovered via
+	// Distinguish a REMOTE peer (a remote glon agent we discovered via
 	// Discord's #roster forum) from local /peer entries (the human "Grant"
-	// self, "TestPeer", etc.). Network peers are pinned to OUTER_PEER_RADIUS
+	// self, "TestPeer", etc.). Remote peers are pinned to OUTER_PEER_RADIUS
 	// so they always sit beyond the local content rings, regardless of how
 	// many there are — they're conceptually "them," not "me."
 	// The astrolabe snapshot projects each object's fields into a plain
@@ -429,7 +429,7 @@ export function buildCosmos(state, materials) {
 	//   - has a host_peer_id link (points at the human who owns that agent)
 	//   - has NO agent_object_id (the rivetkit-local-id field is only set
 	//     for agents on THIS daemon)
-	function isNetworkPeer(obj) {
+	function isRemotePeer(obj) {
 		if (!obj || obj.typeKey !== "peer") return false;
 		if (obj.deleted) return false;
 		if (obj.scalars?.kind !== "agent") return false;
@@ -451,7 +451,7 @@ export function buildCosmos(state, materials) {
 	// Skip soft-deleted objects so the cleanupPeerDuplicates ghosts
 	// don't pile up on the outer ring or in any type cluster.
 	const buckets = new Map();            // typeKey → [obj_id, ...]
-	const networkPeerIds = [];            // separate — pinned outer band
+	const remotePeerIds = [];            // separate — pinned outer band
 	for (const typeKey of typeKeysOrdered) {
 		if (typeKey === "chain.anchor") continue;            // anchors have their spiral
 		const list = byType.get(typeKey) ?? [];
@@ -462,7 +462,7 @@ export function buildCosmos(state, materials) {
 		for (const obj of sorted) {
 			if (obj.deleted) continue;                        // soft-deleted — invisible
 			if (orbitParentOf.has(obj.id)) continue;          // satellite — handled later
-			if (isNetworkPeer(obj)) { networkPeerIds.push(obj.id); continue; }
+			if (isRemotePeer(obj)) { remotePeerIds.push(obj.id); continue; }
 			let bucket = buckets.get(typeKey);
 			if (!bucket) { bucket = []; buckets.set(typeKey, bucket); }
 			bucket.push(obj.id);
@@ -574,15 +574,15 @@ export function buildCosmos(state, materials) {
 	// this so remote glons always render outside ALL local content.
 	const outerLayerRadius = anchorRingEnd;
 
-	// Network peers always live BEYOND the entire local layer (rings
+	// Remote peers always live BEYOND the entire local layer (rings
 	// AND anchor halo). Reads as truly "out there" — another ecosystem
 	// across an empty void.
-	if (networkPeerIds.length > 0) {
-		const N = networkPeerIds.length;
+	if (remotePeerIds.length > 0) {
+		const N = remotePeerIds.length;
 		const spacingFloor = N <= 1 ? 0 : (N * MIN_ARC_SPACING) / (2 * Math.PI);
 		const voidFloor = outerLayerRadius + PEER_VOID_GAP;
 		const radius = Math.max(OUTER_PEER_RADIUS, voidFloor, spacingFloor);
-		const positions = placeOnRing(networkPeerIds, radius);
+		const positions = placeOnRing(remotePeerIds, radius);
 		for (const [id, pos] of positions) primaryRingPosition.set(id, pos);
 		prevRadius = radius;
 	}
@@ -714,7 +714,7 @@ export function buildCosmos(state, materials) {
 					emissiveIntensity: baseEmissive,
 				});
 			}
-			// Network peers (other glon agents we've discovered via Discord's
+			// Remote peers (other glon agents we've discovered via Discord's
 			// #roster forum) get a dedicated visual treatment:
 			//   • trust_level=discovered → MOON: small, dim grey, no
 			//     emissive glow. "Out there, not yet introduced."
@@ -723,8 +723,8 @@ export function buildCosmos(state, materials) {
 			//     ecosystem; click here to talk."
 			// Override after the standard per-type material/scale are set
 			// so we don't have to wedge this into the type-color path.
-			const networkPeer = isNetworkPeer(obj) && !parentId;
-			if (networkPeer) {
+			const remotePeer = isRemotePeer(obj) && !parentId;
+			if (remotePeer) {
 				if (isPeeredPeer(obj)) {
 					// SUN — peered remote glon. Sized comparably to the
 					// local sun (geo radius 2.4) so it reads as "another
@@ -760,7 +760,7 @@ export function buildCosmos(state, materials) {
 			// Sun-peer corona: prominent outer glow around peered remote
 			// glons, matching the local sun's treatment so connected
 			// glons read as "another sun" even from far across the void.
-			if (networkPeer && isPeeredPeer(obj)) {
+			if (remotePeer && isPeeredPeer(obj)) {
 				const coronaGeo = new THREE.SphereGeometry(r * 1.7, 32, 20);
 				const coronaMat = new THREE.MeshBasicMaterial({
 					color: 0xffc66b,

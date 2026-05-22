@@ -115,17 +115,6 @@ app.get("/api/agents/:id/context", (req, res) => {
 		});
 		res.json({ ok: true, agentId: id, status: "accepted" });
 	});
-// ── Auction house, coins, x402 payments, family-figgies routes
-// were stripped along with the /coin and /auction programs.
-//
-// ── Network panel: REMOVED. ─────────────────────────────────────────
-// The old /api/network/* routes (status / peers / requests / peer /
-// forget / accept / decline / announce) proxied to glon's /directory
-// program, which wrapped Hyperswarm peer discovery. Glon retired both
-// when it moved to Discord-as-substrate — discovery happens through
-// the shared #roster forum, A2A through pair channels. The matching
-// frontend network panel was removed too, so these routes are gone.
-
 // ── Peer-chat: agent-to-agent text messaging ────────────────────────
 //
 // Read-only proxy to glon's /peer-chat program. Mutations (send / start

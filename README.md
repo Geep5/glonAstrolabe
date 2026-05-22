@@ -47,9 +47,7 @@ an enable/disable toggle.
 **Peer planets.** Other glon hosts/agents discovered through the
 shared Discord guild appear as their own planets in the cosmos; click
 one to inspect trust level, agent UUID, and the Discord deep-link to
-chat with them. *(The old in-app Network panel was retired alongside
-glon's Hyperswarm layer — discovery now happens through the `#roster`
-forum, and trust state is just another field on the `/peer` object.)*
+chat with them.
 
 **Search** (top). Live highlight on type/name/id/scalar, plus
 server-side block-text search.

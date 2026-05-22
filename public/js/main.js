@@ -103,8 +103,6 @@ const materials = {
 		agents.sort((a, b) => (b.agentStats?.lastActivity ?? 0) - (a.agentStats?.lastActivity ?? 0));
 		contextAgentId = agents[0]?.id ?? null;
 		// Agent chat now lives in Discord (links rendered by the inspector).
-		// The old Hyperswarm-based Network panel was removed alongside the
-		// glon repo's Discord-as-substrate refactor.
 		renderAgentsWidget(agents);
 		startAgentsWidgetRefresh();
 		// Peer chat + peer detail floating panels were folded into the
