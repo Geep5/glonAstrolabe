@@ -69,18 +69,11 @@
 		<h3>Tasks <span id="tasks-count" class="count"></span></h3>
 		<ul id="tasks-list" class="tasks-list"></ul>
 	</aside>
-	<aside id="network">
-		<button class="panel-collapse" data-panel="network" title="Collapse">─</button>
-		<h3>Network <span id="network-count" class="count"></span></h3>
-		<!-- Visibility is driven by the CSS `:empty` rule — shown only when
-		     network-panel.js populates it with pending-incoming-request rows.
-		     Do NOT add the `hidden` attribute here; that overrides `:empty`
-		     and keeps the yellow strip invisible even when there are
-		     requests to accept. -->
-		<div id="network-requests" class="network-requests"></div>
-		<ul id="network-list" class="network-list"></ul>
-		<div class="network-footer muted small" id="network-status"></div>
-	</aside>
+	<!-- Network panel removed alongside the glon repo's Hyperswarm/directory
+	     retirement (mid-2026). Peer discovery now happens through the
+	     #roster forum channel in Discord; trust + peering moved into Discord's
+	     server-membership model. The Astrolabe inspector for a /peer object
+	     still surfaces all the relevant info (trust level, kind, links). -->
 
 
 	<!-- Spell bar: WoW-style action bar at the bottom of the screen.
@@ -95,9 +88,6 @@
 			</button>
 			<button class="spell-slot" data-target="tasks"       data-key="2" type="button" title="Tasks">
 				<span class="spell-glyph">T</span><span class="spell-key">2</span>
-			</button>
-			<button class="spell-slot" data-target="network"     data-key="3" type="button" title="Network">
-				<span class="spell-glyph">N</span><span class="spell-key">3</span>
 			</button>
 		</div>
 		<div class="spell-row">

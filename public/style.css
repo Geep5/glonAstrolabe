@@ -1382,118 +1382,9 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	z-index: 10;
 }
 
-#network {
-	position: fixed;
-	right: 612px;
-	top: 14px;
-	width: 260px;
-	max-height: calc(100vh - 28px);
-	overflow-y: auto;
-	background: var(--bg-panel);
-	backdrop-filter: blur(12px) saturate(1.2);
-	border: 1px solid var(--stroke);
-	border-radius: var(--radius);
-	padding: 10px 14px;
-	box-shadow: var(--shadow);
-	z-index: 10;
-}
-.network-list { list-style: none; margin: 0; padding: 0; }
-.network-row { display: grid; grid-template-columns: 8px 1fr auto; gap: 6px; align-items: center; padding: 4px 6px; border-radius: 4px; }
-.network-row:hover { background: rgba(255,255,255,0.04); }
-.network-dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
-.network-row.trusted .network-dot { background: #5eead4; box-shadow: 0 0 6px rgba(94,234,212,.6); }
-.network-row.discovered .network-dot { background: #ffc857; }
-.network-row.local .network-dot { background: #a78bfa; box-shadow: 0 0 6px rgba(167,139,250,.6); }
-.network-row.remote-agent { padding-left: 22px; opacity: 0.82; }
-.network-row.remote-agent .network-dot { width: 5px; height: 5px; opacity: 0.7; }
-.network-row.offline { opacity: 0.55; }
-.network-row.offline .network-dot { background: #4b5563; box-shadow: none; }
-.network-row.offline.remote-agent { opacity: 0.45; }
-.offline-tag {
-	margin-left: 6px;
-	padding: 0 5px;
-	font: 9px/14px ui-monospace, monospace;
-	border-radius: 999px;
-	background: rgba(255, 255, 255, 0.05);
-	color: var(--text-muted);
-	letter-spacing: 0.04em;
-}
-.network-forget {
-	margin-left: 6px;
-	padding: 0;
-	width: 16px;
-	height: 16px;
-	line-height: 14px;
-	border-radius: 4px;
-	border: 1px solid transparent;
-	background: transparent;
-	color: var(--text-muted);
-	font-size: 14px;
-	cursor: pointer;
-	vertical-align: middle;
-	opacity: 0.5;
-}
-.network-forget:hover {
-	background: rgba(244, 63, 94, 0.15);
-	border-color: rgba(244, 63, 94, 0.35);
-	color: #f87171;
-	opacity: 1;
-}
-.network-forget:disabled { opacity: 0.3; cursor: default; }
-
-/* Self-peer "Your conversations" inbox rows */
-.insp-self-chats-list { list-style: none; margin: 0; padding: 0; }
-.self-chat-row {
-	display: grid;
-	grid-template-columns: auto auto 1fr auto;
-	gap: 8px;
-	align-items: baseline;
-	padding: 6px 8px;
-	border-radius: 4px;
-	cursor: pointer;
-	font-size: 12px;
-}
-.self-chat-row:hover { background: rgba(255,255,255,0.05); }
-.self-chat-name { color: var(--text); font-weight: 500; }
-.self-chat-tag {
-	font: 9px/14px ui-monospace, monospace;
-	padding: 0 5px;
-	border-radius: 999px;
-	background: rgba(255,255,255,0.06);
-	letter-spacing: 0.04em;
-}
-.self-chat-preview {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.self-chat-when { font: 10px/14px ui-monospace, monospace; }
-.network-row.self {
-	border-bottom: 1px dashed rgba(94, 234, 212, 0.18);
-	padding-bottom: 6px;
-	margin-bottom: 4px;
-}
-.network-row.self .network-dot { background: #6b7280; }
-.network-row.self .network-dot.live { background: #5eead4; box-shadow: 0 0 8px rgba(94,234,212,.7); }
-.self-tag {
-	display: inline-block;
-	margin-left: 4px;
-	padding: 0 5px;
-	font: 9px/14px ui-monospace, monospace;
-	border-radius: 999px;
-	background: rgba(94, 234, 212, 0.12);
-	color: #5eead4;
-	letter-spacing: 0.05em;
-	vertical-align: 1px;
-}
-.network-name { color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.peer-suffix {
-	margin-left: 4px;
-	font: 10px/14px ui-monospace, monospace;
-	color: var(--text-muted);
-	opacity: 0.65;
-	letter-spacing: 0.02em;
-}
+/* Network panel + self-chats inbox styles removed alongside Astrolabe's
+ * Hyperswarm/directory/in-app-chat retirement. Discord is the chat
+ * surface; the network was Hyperswarm-discovery only and is gone. */
 
 /* ── Peer-chat overlay ────────────────────────────────────────── */
 /* Floats above the scene when openPeerChat() is called. Anchored to the
@@ -1806,24 +1697,8 @@ input[type="search"]:focus { border-color: rgba(94,234,212,.45); }
 	border-color: rgba(255, 198, 107, 0.9);
 	transition: background 0.08s, border-color 0.08s;
 }
-.network-action {
-	font: 10px/1 ui-monospace, "SF Mono", monospace;
-	padding: 3px 8px;
-	border-radius: 999px;
-	border: 1px solid rgba(94,234,212,.45);
-	background: rgba(94,234,212,.06);
-	color: #5eead4;
-	cursor: pointer;
-}
-.network-action:hover { background: rgba(94,234,212,.16); }
-.network-action:disabled { opacity: 0.4; cursor: progress; }
-.network-action.muted { border-color: rgba(255,255,255,.1); color: var(--text-muted); background: transparent; }
-.network-requests { margin: 4px 0 8px; padding: 8px; border-radius: 6px; background: rgba(255, 200, 87, 0.07); border: 1px solid rgba(255, 200, 87, 0.25); }
-.network-requests:empty { display: none; }
-.network-request { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; padding: 3px 0; font-size: 11px; }
-.network-request .network-action.decline { color: #f87171; border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.06); }
-.network-request .network-action.decline:hover { background: rgba(248,113,113,.18); }
-.network-footer { margin-top: 8px; font-size: 10px; color: var(--text-muted); }
+/* .network-action / .network-request / .network-footer rules removed
+ * with the rest of the Hyperswarm network panel cleanup. */
 .coins-list { list-style: none; margin: 0; padding: 0; }
 .coins-row {
 	display: grid;

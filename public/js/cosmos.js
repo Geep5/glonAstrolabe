@@ -382,11 +382,11 @@ export function buildCosmos(state, materials) {
 	//   Outer ring (44)      — network peers (other glons), as moons or suns
 	//                          depending on trust level
 	//
-	// A "network peer" is a /peer object with an identity_pubkey — i.e.
-	// a remote glon we've discovered on the swarm, not the local self
-	// peer ("Grant"). Untrusted peers render as small dim moons; trusted
-	// peers render bigger and brighter and (later) carry their own
-	// agents on a mini-orbit around them.
+	// A "network peer" is a /peer object with an agent_uuid + host_peer_id
+	// — i.e. a remote glon agent we've discovered via Discord's #roster
+	// forum, not a local agent or the human self peer. Untrusted peers
+	// render as small dim moons; trusted peers render bigger and brighter
+	// and (later) carry their own agents on a mini-orbit around them.
 	//
 	// Anchors keep their dedicated spiral just outside the middle ring;
 	// satellites (objects with orbitParentOf) still orbit their parent
@@ -414,33 +414,29 @@ export function buildCosmos(state, materials) {
 	const MIN_ARC_SPACING  = 2.4;         // min tangent distance between adjacent items on a ring
 	const MIN_RING_GAP     = 3.0;         // min radial gap between concentric rings
 
-	// Distinguish a NETWORK peer (a remote glon we discovered) from local
-	// /peer entries that have no identity_pubkey (the human "Grant" self,
-	// "TestPeer", etc.). Network peers are pinned to OUTER_PEER_RADIUS so
-	// they always sit beyond the local content rings, regardless of how
+	// Distinguish a NETWORK peer (a remote glon agent we discovered via
+	// Discord's #roster forum) from local /peer entries (the human "Grant"
+	// self, "TestPeer", etc.). Network peers are pinned to OUTER_PEER_RADIUS
+	// so they always sit beyond the local content rings, regardless of how
 	// many there are — they're conceptually "them," not "me."
 	// The astrolabe snapshot projects each object's fields into a plain
 	// `scalars` object (string values). Cosmos reads via `obj.scalars`.
 	//
-	// A "network peer" is a /peer row that points at a real remote glon:
-	//   - has BOTH identity_pubkey (chain identity) AND hyperswarm_pubkey
-	//     (current Noise key). identity_pubkey alone isn't enough — local
-	//     test records (TestPeer etc.) sometimes carry our own identity
-	//     pubkey without ever being a real peer on the wire.
-	//   - is not soft-deleted.
-	//   - has been seen recently (within PEER_STALE_MS). Stale peers
-	//     went offline; rendering them as moons forever is noise.
-	const PEER_STALE_MS = 15 * 60 * 1000;   // 15 min; ~3x the announce interval
+	// A "remote peer" is a kind=agent /peer row that points at an agent on
+	// a different daemon. Recognized by:
+	//   - kind=agent on the peer object
+	//   - has an agent_uuid scalar (globally unique v4)
+	//   - has a host_peer_id link (points at the human who owns that agent)
+	//   - has NO agent_object_id (the rivetkit-local-id field is only set
+	//     for agents on THIS daemon)
 	function isNetworkPeer(obj) {
 		if (!obj || obj.typeKey !== "peer") return false;
 		if (obj.deleted) return false;
-		const idp = obj.scalars?.identity_pubkey;
-		const hsp = obj.scalars?.hyperswarm_pubkey;
-		if (typeof idp !== "string" || idp.length !== 64) return false;
-		if (typeof hsp !== "string" || hsp.length !== 64) return false;
-		const lastSeen = parseInt(obj.scalars?.last_seen ?? "0", 10);
-		if (!lastSeen) return false;                       // never seen — not active
-		if ((Date.now() - lastSeen) > PEER_STALE_MS) return false;
+		if (obj.scalars?.kind !== "agent") return false;
+		const uuid = obj.scalars?.agent_uuid;
+		if (typeof uuid !== "string" || uuid.length < 32) return false;
+		if (obj.scalars?.agent_object_id) return false;     // local agent, not a remote
+		if (!obj.scalars?.host_peer_id) return false;        // no host link, not a real remote
 		return true;
 	}
 	function getTrustLevel(obj) {
@@ -718,8 +714,8 @@ export function buildCosmos(state, materials) {
 					emissiveIntensity: baseEmissive,
 				});
 			}
-			// Network peers (other glons we've seen on the swarm) get a
-			// dedicated visual treatment:
+			// Network peers (other glon agents we've discovered via Discord's
+			// #roster forum) get a dedicated visual treatment:
 			//   • trust_level=discovered → MOON: small, dim grey, no
 			//     emissive glow. "Out there, not yet introduced."
 			//   • trust_level=trusted/friend/family/self → SUN: bigger,
@@ -1362,7 +1358,7 @@ export function buildCosmos(state, materials) {
 	//
 	// Crucial invariant: the convo node ALWAYS renders, even when the
 	// peer's sun isn't visible in the scene (peer offline, no /peer
-	// record yet, peer record but no identity_pubkey). The node is the
+	// record yet, peer record but no agent_uuid). The node is the
 	// affordance to open the chat — it can't be gated on the peer being
 	// drawable. When peer position is known the node points toward it;
 	// otherwise it sits at a stable hash-derived angle around the local
@@ -1380,7 +1376,7 @@ export function buildCosmos(state, materials) {
 		if (peerPos && (peerPos.x !== 0 || peerPos.z !== 0)) {
 			return Math.atan2(peerPos.z, peerPos.x);
 		}
-		const key = conv.peer_identity_pubkey || conv.peer_object_id || conv.peer_display_name || "";
+		const key = conv.peer_agent_uuid || conv.peer_object_id || conv.peer_display_name || "";
 		return hash01("convo:" + key) * Math.PI * 2;
 	}
 	const conversationNodes = new Map(); // key → { mesh, glowLine }
@@ -1388,9 +1384,9 @@ export function buildCosmos(state, materials) {
 		const seen = new Set();
 		const conv_list = Array.isArray(conversations) ? conversations : [];
 		for (const conv of conv_list) {
-			// Stable key: prefer identity_pubkey (the cryptographic
-			// identity), fall back to peer_object_id or display name.
-			const key = conv.peer_identity_pubkey || conv.peer_object_id || conv.peer_display_name;
+			// Stable key: prefer agent_uuid (the agent's global v4
+			// identifier), fall back to peer_object_id or display name.
+			const key = conv.peer_agent_uuid || conv.peer_object_id || conv.peer_display_name;
 			if (!key) continue;
 			seen.add(key);
 			const peerPos = conv.peer_object_id ? primaryRingPosition.get(conv.peer_object_id) : null;
@@ -1414,7 +1410,7 @@ export function buildCosmos(state, materials) {
 					kind: "conversation",
 					channel: "sun-to-sun",     // future: "agent-to-agent" | "human-to-agent"
 					peer_object_id: conv.peer_object_id ?? null,
-					peer_identity_pubkey: conv.peer_identity_pubkey ?? null,
+					peer_agent_uuid: conv.peer_agent_uuid ?? null,
 					peer_display_name: conv.peer_display_name ?? "",
 				};
 				group.add(mesh);
@@ -1429,14 +1425,14 @@ export function buildCosmos(state, materials) {
 					opacity: 0.4,
 				});
 				const glowLine = new THREE.LineSegments(lineGeo, lineMat);
-				glowLine.userData = { kind: "conversation-link", peer_identity_pubkey: conv.peer_identity_pubkey };
+				glowLine.userData = { kind: "conversation-link", peer_agent_uuid: conv.peer_agent_uuid };
 				group.add(glowLine);
 				entry = { mesh, glowLine };
 				conversationNodes.set(key, entry);
 			}
 			entry.mesh.position.copy(nodePos);
 			entry.mesh.userData.peer_display_name = conv.peer_display_name ?? "";
-			entry.mesh.userData.peer_identity_pubkey = conv.peer_identity_pubkey ?? null;
+			entry.mesh.userData.peer_agent_uuid = conv.peer_agent_uuid ?? null;
 			entry.mesh.userData.peer_object_id = conv.peer_object_id ?? null;
 			// Recency pulse: brighter for messages in the last 10 minutes.
 			const ageS = (Date.now() - (conv.last_message_at || 0)) / 1000;

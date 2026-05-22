@@ -117,214 +117,21 @@ app.get("/api/agents/:id/context", (req, res) => {
 	});
 // ── Auction house, coins, x402 payments, family-figgies routes
 // were stripped along with the /coin and /auction programs.
-
-// ── Network panel: peers discovered through the Hyperswarm directory ──
 //
-// Mirrors the /directory program's actions. The UI calls these to render
-// the network panel, surface peer-request prompts, and send accept/decline.
-
-app.get("/api/network/status", async (_req, res) => {
-	console.log("[GET /api/network/status] request");
-	try {
-		const status = await dispatchToDaemon("/directory", "status", []);
-		console.log("[GET /api/network/status] success");
-		res.json({ ok: true, status });
-	} catch (err: any) {
-		console.log("[GET /api/network/status] caught error (graceful fallback):", err?.message);
-		// Return empty status instead of crashing on missing /directory program
-		res.json({ ok: true, status: { ready: false, reason: "directory program not deployed" } });
-	}
-});
-
-app.get("/api/network/peers", async (_req, res) => {
-	console.log("[GET /api/network/peers] request");
-	try {
-		const peers = await dispatchToDaemon("/directory", "listDiscovered", []);
-		const peerList = await dispatchToDaemon("/peer", "list", []);
-		console.log(`[GET /api/network/peers] discovered ${peers?.length ?? 0} peers, ${peerList?.length ?? 0} in list`);
-		// Index /peer records by every key the discovered-peer side might
-		// know — identity_pubkey, hyperswarm_pubkey, display_name — so the
-		// merge succeeds even before a peer has bootstrapped its wallet
-		// (identity empty) or when two peers happen to share a name.
-		const trustMap = new Map<string, string>();
-		const setBest = (key: string | undefined, level: string | undefined) => {
-			if (!key || !level) return;
-			const k = key.toLowerCase();
-			const existing = trustMap.get(k);
-			if (!existing || existing !== "trusted") trustMap.set(k, level);
-		};
-		for (const p of peerList || []) {
-			setBest(p.identity_pubkey, p.trust_level);
-			setBest(p.hyperswarm_pubkey, p.trust_level);
-			setBest(p.display_name, p.trust_level);
-		}
-		// Group /peer records by host_peer_id so each discovered glon row
-		// can render chat buttons on its remote agents.
-		const remoteAgentsByHost = new Map<string, any[]>();
-		for (const p of peerList || []) {
-			if (p?.kind === "agent" && p?.host_peer_id) {
-				const arr = remoteAgentsByHost.get(p.host_peer_id) ?? [];
-				arr.push({
-					id: p.id,
-					display_name: p.display_name,
-					agent_id_remote: p.agent_id_remote,
-					trust_level: p.trust_level,
-				});
-				remoteAgentsByHost.set(p.host_peer_id, arr);
-			}
-		}
-		const merged = (peers || []).map((p: any) => ({
-			...p,
-			trust_level: trustMap.get((p.identity_pubkey || "").toLowerCase())
-				|| trustMap.get((p.hyperswarm_pubkey || "").toLowerCase())
-				|| trustMap.get((p.agent_name || "").toLowerCase())
-				|| (p.peer_object_id ? "trusted" : "discovered"),
-			remote_agent_peers: p.peer_object_id ? (remoteAgentsByHost.get(p.peer_object_id) ?? []) : [],
-			is_online: true,
-		}));
-		// Persistent contacts: every kind=human /peer record that's peered
-		// (trusted/family/friend) but not currently in listDiscovered. Lets
-		// the network panel render trusted peers as offline rows so they
-		// don't disappear when their daemon naps — like a contacts list.
-		const liveIds = new Set(merged.map((p: any) => p.peer_object_id).filter(Boolean));
-		const peeredTrust = new Set(["trusted", "family", "friend"]);
-		const offlineHosts = (peerList || [])
-			.filter((p: any) => p?.kind === "human" && peeredTrust.has(p?.trust_level) && !liveIds.has(p.id))
-			.map((p: any) => ({
-				identity_pubkey: p.identity_pubkey ?? "",
-				hyperswarm_pubkey: p.hyperswarm_pubkey ?? "",
-				agent_name: p.display_name ?? "(unnamed host)",
-				capabilities: [],
-				first_seen: null,
-				last_seen: p.last_seen ? Number(p.last_seen) : null,
-				peer_object_id: p.id,
-				agents: [],
-				trust_level: p.trust_level,
-				remote_agent_peers: remoteAgentsByHost.get(p.id) ?? [],
-				is_online: false,
-			}));
-		const allPeers = [...merged, ...offlineHosts];
-		console.log(`[GET /api/network/peers] returning ${merged.length} online + ${offlineHosts.length} offline`);
-		res.json({ ok: true, peers: allPeers });
-	} catch (err: any) {
-		console.log("[GET /api/network/peers] caught error (graceful fallback):", err?.message);
-		// Return empty peers list instead of crashing
-		res.json({ ok: true, peers: [] });
-	}
-});
-
-app.get("/api/network/requests", async (_req, res) => {
-	console.log("[GET /api/network/requests] request");
-	try {
-		const requests = await dispatchToDaemon("/directory", "listRequests", []);
-		console.log(`[GET /api/network/requests] found ${requests?.length ?? 0} requests`);
-		res.json({ ok: true, requests });
-	} catch (err: any) {
-		console.log("[GET /api/network/requests] caught error (graceful fallback):", err?.message);
-		// Return empty requests list instead of crashing
-		res.json({ ok: true, requests: [] });
-	}
-});
-
-app.post("/api/network/peer", async (req, res) => {
-	// Body: { hyperswarm_pubkey?: string, identity_pubkey?: string, message?: string }
-	try {
-		const result = await dispatchToDaemon("/directory", "requestPeering", [req.body ?? {}]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-// Forget a peer: remove its /peer record AND any kind=agent records that
-// pointed at it via host_peer_id (orphaned remote-agent rows) AND drop
-// it from /directory's state.discovered AND blocklist it so future
-// announces don't re-add it. Useful for pruning stale testing peers
-// after repeated resets on the other side.
-app.post("/api/network/peers/:id/forget", async (req, res) => {
-	const hostId = req.params.id;
-	if (!hostId) return res.status(400).json({ ok: false, error: "peer id required" });
-	try {
-		const peerList = await dispatchToDaemon("/peer", "list", []) as any[];
-		// Snapshot the host's identity/hyperswarm pubkey BEFORE removing —
-		// we need them to tell /directory which discovered entry to drop.
-		const hostRow = (peerList || []).find((p) => p?.id === hostId);
-		const host_identity = (hostRow?.identity_pubkey ?? "").trim();
-		const host_hyperswarm = (hostRow?.hyperswarm_pubkey ?? "").trim();
-		const targets = [hostId];
-		const agentRemoteIdentities: string[] = [];
-		for (const p of peerList || []) {
-			if (p?.kind === "agent" && p?.host_peer_id === hostId) {
-				targets.push(p.id);
-				if (p?.identity_pubkey) agentRemoteIdentities.push(p.identity_pubkey);
-			}
-		}
-		const removed: string[] = [];
-		for (const id of targets) {
-			try {
-				await dispatchToDaemon("/peer", "remove", [{ peer_id: id }]);
-				removed.push(id);
-			} catch (err: any) {
-				console.log(`[forget] failed to remove ${id}: ${err?.message ?? err}`);
-			}
-		}
-		// Drop from /directory's discovered cache + add to its blocklist
-		// so the very next announce doesn't bring the row back.
-		if (host_identity || host_hyperswarm) {
-			try {
-				await dispatchToDaemon("/directory", "forgetDiscovered", [{
-					identity_pubkey: host_identity || undefined,
-					hyperswarm_pubkey: host_hyperswarm || undefined,
-				}]);
-			} catch (err: any) {
-				console.log(`[forget] forgetDiscovered failed: ${err?.message ?? err}`);
-			}
-		}
-		// Also blocklist each remote-agent synthetic identity so they don't
-		// get re-created as fresh /peer records from the host's next roster.
-		for (const ident of agentRemoteIdentities) {
-			try {
-				await dispatchToDaemon("/directory", "forgetDiscovered", [{ identity_pubkey: ident }]);
-			} catch { /* best-effort */ }
-		}
-		res.json({ ok: true, removed });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/network/requests/:id/accept", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/directory", "acceptRequest", [{ request_id: req.params.id }]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/network/requests/:id/decline", async (req, res) => {
-	try {
-		const result = await dispatchToDaemon("/directory", "declineRequest", [{ request_id: req.params.id }]);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
-
-app.post("/api/network/announce", async (_req, res) => {
-	try {
-		const result = await dispatchToDaemon("/directory", "announce", []);
-		res.json({ ok: true, result });
-	} catch (err: any) {
-		res.status(503).json({ ok: false, error: err?.message ?? String(err) });
-	}
-});
+// ── Network panel: REMOVED. ─────────────────────────────────────────
+// The old /api/network/* routes (status / peers / requests / peer /
+// forget / accept / decline / announce) proxied to glon's /directory
+// program, which wrapped Hyperswarm peer discovery. Glon retired both
+// when it moved to Discord-as-substrate — discovery happens through
+// the shared #roster forum, A2A through pair channels. The matching
+// frontend network panel was removed too, so these routes are gone.
 
 // ── Peer-chat: agent-to-agent text messaging ────────────────────────
 //
-// Mirrors /peer-chat typed actions. The Network panel opens a chat panel
-// when the user clicks a `peered` row; the panel polls messages and posts
-// new ones through these endpoints.
+// Read-only proxy to glon's /peer-chat program. Mutations (send / start
+// / resume / end) still proxy through, but the inspector now surfaces
+// each conversation as a Discord deep-link rather than rendering it
+// in-app, so the read paths matter most.
 
 app.get("/api/peer-chat/conversations", async (_req, res) => {
 	console.log("[GET /api/peer-chat/conversations] request");
@@ -340,11 +147,11 @@ app.get("/api/peer-chat/conversations", async (_req, res) => {
 });
 
 app.get("/api/peer-chat/messages", async (req, res) => {
-	// Query: ?conversation_id=... | ?identity_pubkey=... | ?peer_id=... [&since=&limit=]
+	// Query: ?conversation_id=... | ?agent_uuid=... | ?peer_id=... [&since=&limit=]
 	try {
 		const input: Record<string, unknown> = {};
 		if (typeof req.query.conversation_id === "string") input.conversation_id = req.query.conversation_id;
-		if (typeof req.query.identity_pubkey === "string") input.identity_pubkey = req.query.identity_pubkey;
+		if (typeof req.query.agent_uuid === "string") input.agent_uuid = req.query.agent_uuid;
 		if (typeof req.query.peer_id === "string") input.peer_id = req.query.peer_id;
 		if (typeof req.query.since === "string") {
 			const n = Number(req.query.since);
@@ -362,13 +169,13 @@ app.get("/api/peer-chat/messages", async (req, res) => {
 });
 
 app.post("/api/peer-chat/send", async (req, res) => {
-	// Body: { identity_pubkey?: string, peer_id?: string, display_name?: string, text: string, in_reply_to?: string|null }
+	// Body: { agent_uuid?: string, peer_id?: string, display_name?: string, text: string, in_reply_to?: string|null }
 	try {
 		const result = await dispatchToDaemon("/peer-chat", "send", [req.body ?? {}]);
 		res.json({ ok: true, result });
 	} catch (err: any) {
-		// Distinguish trust-gate refusals (user-fixable) from swarm timeouts
-		// so the UI can show a useful message.
+		// Distinguish trust-gate refusals (user-fixable) from Discord /
+		// daemon timeouts so the UI can show a useful message.
 		const msg = err?.message ?? String(err);
 		const status = /trust|peered|peer matches/i.test(msg) ? 400 : 503;
 		res.status(status).json({ ok: false, error: msg });
@@ -376,7 +183,7 @@ app.post("/api/peer-chat/send", async (req, res) => {
 });
 
 app.post("/api/peer-chat/start", async (req, res) => {
-	// Body: { peer_id?: string, identity_pubkey?: string, display_name?: string, goal: string, text: string }
+	// Body: { peer_id?: string, agent_uuid?: string, display_name?: string, goal: string, text: string }
 	// Starts a new conversation with a peer. Used by the inspector when
 	// the user types into a peer's chat pane and no active conversation exists.
 	try {

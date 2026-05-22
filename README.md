@@ -44,11 +44,12 @@ content, change DAG. For agents it also has:
 **Tasks panel.** Daemon-level recurring tasks + reminders, each with
 an enable/disable toggle.
 
-**Network panel.** Discord-discovered peers (other glons listed in the
-shared `#roster` forum), their trust level, and pending peer-request
-prompts. *(Note: the Hyperswarm-based discovery layer was retired in
-glon's Discord-as-substrate refactor; the network panel still shows
-trust state from `/peer`, but discovery now happens via `#roster`.)*
+**Peer planets.** Other glon hosts/agents discovered through the
+shared Discord guild appear as their own planets in the cosmos; click
+one to inspect trust level, agent UUID, and the Discord deep-link to
+chat with them. *(The old in-app Network panel was retired alongside
+glon's Hyperswarm layer — discovery now happens through the `#roster`
+forum, and trust state is just another field on the `/peer` object.)*
 
 **Search** (top). Live highlight on type/name/id/scalar, plus
 server-side block-text search.
@@ -90,8 +91,7 @@ object's stored ids. If `GLON_A2A_DISCORD_GUILD` isn't set, the
 inspector shows a disabled "Discord A2A is not configured" tile.
 
 Read-only mutation paths (the few that remain — peer trust changes,
-network requests) still proxy to the glon daemon's `/dispatch`
-endpoint.
+task toggles) still proxy to the glon daemon's `/dispatch` endpoint.
 
 ### Server-side filters
 
@@ -161,10 +161,6 @@ GET  /api/agents/:id/context                   { agentId, agentName, objectIds }
 GET  /api/discord/config                       { guild_id, roster_forum_id, pair_category_id } — frontend builds Discord links from these
 GET  /api/peer-chat/conversations              read-only list of A2A conversations (used to build per-agent Discord link lists)
 GET  /api/peer-chat/messages?conversation_id=… messages in a conversation (read-only fallback)
-GET  /api/network/{status,peers,requests}      legacy network panel; mostly empty post-Hyperswarm-retirement
-POST /api/network/peer                         peer with a discovered node
-POST /api/network/requests/:id/{accept,decline} respond to an incoming peer request
-POST /api/network/announce                     re-broadcast our peer record on the swarm
 GET  /api/wallet                               { pubkeys: [...] } from ~/.glon/wallet.json
 GET  /api/search?q=…&limit=20                  free-text over metadata + agent block content
 GET  /api/events                               SSE stream (replay last ~50, then live)
@@ -201,8 +197,7 @@ glonAstrolabe/
 │ └ js/
 │   ├ main.js          scene, camera, controls, raycasting, agents widget
 │   ├ cosmos.js        ball layout, drift, magnet, heat, halo, link tubes
-│   ├ inspector.js     inspector DOM + Chat tab + Peer chats tab + context bar
-│   ├ network-panel.js Hyperswarm peer rows
+│   ├ inspector.js     inspector DOM + Discord chat links + context bar
 │   ├ livelog.js       SSE client + console row renderer
 │   ├ spell-bar.js     panel-toggle keyboard shortcuts
 │   ├ planet-styles.js procedural planet surfaces

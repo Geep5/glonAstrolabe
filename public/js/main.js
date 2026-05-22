@@ -20,7 +20,6 @@ import { colorForType } from "./colors.js";
 	import { bindInspector, setLanding, showObject, clear as clearInspector, setContextState, showDaemonTask } from "./inspector.js";
 	import { setupLiveLog } from "./livelog.js";
 
-	import { initNetworkPanel } from "./network-panel.js";
 	import { initSpellBar } from "./spell-bar.js";
 	import { getRender, setRender, clearRender, applyToMesh, updateOverlays } from "./planet-styles.js";
 	import { initPhysics } from "./physics.js";
@@ -103,8 +102,9 @@ const materials = {
 		const agents = snapshot.objects.filter((o) => o.typeKey === "agent");
 		agents.sort((a, b) => (b.agentStats?.lastActivity ?? 0) - (a.agentStats?.lastActivity ?? 0));
 		contextAgentId = agents[0]?.id ?? null;
-		// Agent chat lives inside the inspector now; no floating chat-dock.
-		initNetworkPanel();
+		// Agent chat now lives in Discord (links rendered by the inspector).
+		// The old Hyperswarm-based Network panel was removed alongside the
+		// glon repo's Discord-as-substrate refactor.
 		renderAgentsWidget(agents);
 		startAgentsWidgetRefresh();
 		// Peer chat + peer detail floating panels were folded into the
@@ -873,7 +873,6 @@ function bindUI() {
 		makeDraggable("tasks",       null, "glonAstrolabe.panelPos.tasks");
 		makeDraggable("inspector",   null, "glonAstrolabe.panelPos.inspector");
 		makeDraggable("livelog",     null, "glonAstrolabe.panelPos.livelog");
-		makeDraggable("network",     null, "glonAstrolabe.panelPos.network");
 		// Resizable panels — bottom-right corner handle. Sizes persist to
 		// localStorage under panelSize.<id>.
 		makeResizable("legend",      "glonAstrolabe.panelSize.legend");
@@ -881,7 +880,6 @@ function bindUI() {
 		makeResizable("tasks",       "glonAstrolabe.panelSize.tasks");
 		makeResizable("inspector",   "glonAstrolabe.panelSize.inspector");
 		makeResizable("livelog",     "glonAstrolabe.panelSize.livelog");
-		makeResizable("network",     "glonAstrolabe.panelSize.network");
 
 		// Collapsible panels — `.collapsed` class is the partial-collapse
 		// state (header visible, body hidden) driven by the in-panel
@@ -1043,7 +1041,7 @@ function onClick(e) {
 	if (!first) return;
 	const ud = first.userData;
 	if (ud.kind === "object") {
-		// All node clicks open the inspector — including network peers
+		// All node clicks open the inspector.
 		// (which used to fan out into a floating peer-detail panel).
 		select(ud.id);
 	} else if (ud.kind === "conversation") {
@@ -1082,7 +1080,7 @@ function onDoubleClick(e) {
 		highlightSelected();
 		if (focus) focusOnId(id);
 	}
-	// Exposed so other modules (network-panel) can drive selection without
+	// Exposed so other modules can drive selection without
 	// importing main.js directly.
 	window.glonSelectObject = select;
 
