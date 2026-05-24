@@ -100,8 +100,6 @@ export interface AgentStats {
 		timestamp: number;
 		author: string;
 		opSummary: string[];
-		/** Authentication extension type, e.g. "ed25519" for chain-mode signed changes. */
-		authType?: string;
 	}
 
 export interface VizBlock {
@@ -736,7 +734,6 @@ export function getObjectChanges(id: string): VizChange[] | null {
 		timestamp: ch.timestamp,
 		author: ch.author,
 		opSummary: ch.ops.map(opSummary),
-		authType: ch.authExtension?.type,
 	}));
 }
 
@@ -970,6 +967,3 @@ export function search(query: string, limit: number = 20): SearchResults {
 	blocks.sort((a, b) => b.score - a.score || b.timestamp - a.timestamp);
 	return { query, objects: objects.slice(0, limit), blocks: blocks.slice(0, limit) };
 }
-
-
-	// getCoinOverview was here — removed with the /coin program.

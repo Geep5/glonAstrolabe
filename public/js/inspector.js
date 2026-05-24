@@ -316,11 +316,6 @@ function render(detail, changesResponse) {
 		els.linksSection.hidden = true;
 	}
 
-
-	// Coin buckets are gone — fungible balances now live in the autobase
-	// hyperbee view at `balance/<token>/<pubkey>`, not as chain.coin.bucket
-	// objects. The inspector defers coin display to the Coins panel.
-
 	// Style section (all objects) --------------------------------
 	renderStyleSection(obj.id);
 
@@ -350,12 +345,6 @@ function render(detail, changesResponse) {
 		const ops = document.createElement("span"); ops.className = "ops";
 		ops.textContent = ch.opSummary.join(" ");
 		ops.title = ch.opSummary.join("\n");
-		if (ch.authType) {
-			const badge = document.createElement("span");
-			badge.className = "auth-badge";
-			badge.textContent = ch.authType;
-			ops.appendChild(badge);
-		}
 		row.appendChild(dot); row.appendChild(hash); row.appendChild(ops);
 		els.changes.appendChild(row);
 	}

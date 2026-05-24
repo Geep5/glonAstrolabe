@@ -81,9 +81,8 @@ let contextAgentId = null;
 const materials = {
 	// Higher-poly spheres so the procedural surface texture and directional
 	// sun lighting render smoothly without faceting on close-up balls.
-	sphere:      new THREE.SphereGeometry(1, 48, 32),
-	sphereSmall: new THREE.SphereGeometry(1, 14, 10),
-	halo:        new THREE.SphereGeometry(1, 24, 18),
+	sphere: new THREE.SphereGeometry(1, 48, 32),
+	halo:   new THREE.SphereGeometry(1, 24, 18),
 };
 
 // ── Init ───────────────────────────────────────────────────────────

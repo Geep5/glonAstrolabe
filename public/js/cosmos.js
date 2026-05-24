@@ -131,7 +131,6 @@ const TYPE_LAYOUT = {
 	json:       { radius: 18, y: -2.0, scale: 0.4 },
 	source:     { radius: 19, y: 0,    scale: 0.4 },
 	proto:      { radius: 20, y: 2.0,  scale: 0.4 },
-	"chain.anchor": { radius: 22, y: 0, scale: 0.25 },
 	unknown:    { radius: 24, y: 0,    scale: 0.25 },
 };
 
@@ -180,7 +179,7 @@ function computeTypeRadii(byType) {
 	// Self-adjusting: any unexpected types not in TYPE_PRIORITY get appended
 	// after all known types, maintaining automatic spacing.
 	for (const [typeKey, list] of byType) {
-		if (computed.has(typeKey) || typeKey === "chain.anchor") continue;
+		if (computed.has(typeKey)) continue;
 		if (!list || list.length === 0) continue;
 		const base = TYPE_LAYOUT[typeKey] ?? TYPE_LAYOUT.unknown;
 		const gap = Math.min(4.0, Math.max(1.5, 1.0 + list.length * 0.15));
@@ -324,20 +323,15 @@ export function buildCosmos(state, materials) {
 	}
 
 	// Map object id → orbit-parent id from link relations.
-	// spawn_parent (agent subagents) takes priority; owner and token links
-	// create secondary orbital clusters. Objects orbit their parent like
-	// moons rather than sitting on the global type ring.
+	// spawn_parent (agent subagents) takes priority; owner links create
+	// secondary orbital clusters. Objects orbit their parent like moons
+	// rather than sitting on the global type ring.
 	const orbitParentOf = new Map();
 	for (const link of state.links) {
 		if (link.relationKey === "spawn_parent") orbitParentOf.set(link.sourceId, link.targetId);
 	}
 	for (const link of state.links) {
 		if (link.relationKey === "owner" && !orbitParentOf.has(link.sourceId)) {
-			orbitParentOf.set(link.sourceId, link.targetId);
-		}
-	}
-	for (const link of state.links) {
-		if (link.relationKey === "token" && !orbitParentOf.has(link.sourceId)) {
 			orbitParentOf.set(link.sourceId, link.targetId);
 		}
 	}
@@ -363,10 +357,6 @@ export function buildCosmos(state, materials) {
 	}
 	const spawnDepthOf = (obj) => Number(obj.scalars?.spawn_depth ?? 0);
 
-	// Per-object size scaling used to be driven by crypto values (token
-	// supply, wallet balance, offer amount). Now that the /coin program
-	// is gone, everything uses the constant scale from layoutForType().
-	function valueScaleFor(_obj) { return null; }
 	const positions = new Map(); // id → THREE.Vector3
 	const homePositions = new Map(); // id → THREE.Vector3 (frozen after placement)
 	const nodes = new Map();     // id → { mesh, ring, halo? }
@@ -453,7 +443,6 @@ export function buildCosmos(state, materials) {
 	const buckets = new Map();            // typeKey → [obj_id, ...]
 	const remotePeerIds = [];            // separate — pinned outer band
 	for (const typeKey of typeKeysOrdered) {
-		if (typeKey === "chain.anchor") continue;            // anchors have their spiral
 		const list = byType.get(typeKey) ?? [];
 		const isAgentType = typeKey === "agent" || typeKey === "trading_agent";
 		const sorted = isAgentType
@@ -522,57 +511,10 @@ export function buildCosmos(state, materials) {
 	}
 	const localOuterRadius = prevRadius;     // outermost LOCAL content ring (now ends with agent)
 
-	// Anchor spiral: walk the chain once here, cap visible anchors at
-	// MAX_VISIBLE_ANCHORS, and prune byType.get("chain.anchor") down to
-	// just the renderable head so the main render loop doesn't allocate
-	// meshes/bodies for thousands of off-screen historical anchors.
-	const MAX_VISIBLE_ANCHORS = 120;
-	const allAnchors = (byType.get("chain.anchor") ?? []).filter((o) => !o.deleted);
-	const anchorChain = [];
-	let renderableChain = [];
-	if (allAnchors.length > 0) {
-		const anchorById = new Map(allAnchors.map((a) => [a.id, a]));
-		const seen = new Set();
-		let head = allAnchors.find((a) => {
-			const prev = a.scalars?.previous_anchor;
-			return !prev || !anchorById.has(String(prev));
-		});
-		if (!head) {
-			head = [...allAnchors].sort((a, b) => Number(a.scalars?.height ?? 0) - Number(b.scalars?.height ?? 0))[0];
-		}
-		const nextOf = new Map();
-		for (const a of allAnchors) {
-			const prev = String(a.scalars?.previous_anchor ?? "");
-			if (prev && anchorById.has(prev)) nextOf.set(prev, a.id);
-		}
-		let curId = head?.id;
-		while (curId && !seen.has(curId)) {
-			seen.add(curId);
-			const a = anchorById.get(curId);
-			if (!a) break;
-			anchorChain.push(a);
-			curId = nextOf.get(curId);
-		}
-		// Append unvisited (orphans / broken links) so they don't disappear silently.
-		for (const a of allAnchors) {
-			if (!seen.has(a.id)) anchorChain.push(a);
-		}
-		renderableChain = anchorChain.slice(-MAX_VISIBLE_ANCHORS);
-		// Prune byType so the main render loop only creates meshes for
-		// the visible head of the chain. Off-screen anchors are still
-		// in the DAG; the chain itself is just historical now.
-		byType.set("chain.anchor", renderableChain);
-	}
-	// Compact ribbon: cap total radial growth at 2 units so the spiral
-	// is a narrow band, not a sprawling coil.
-	const anchorRadialSpan = 2;
-	const anchorRingStart = localOuterRadius + MIN_RING_GAP + 1.5;
-	const visibleAnchorCount = renderableChain.length;
-	const anchorRingEnd = anchorRingStart + (visibleAnchorCount > 1 ? anchorRadialSpan : 0);
 	// `outerLayerRadius` = the radius of the OUTERMOST visible thing
-	// rendered around the sun (the anchor ribbon). Peer band sits beyond
-	// this so remote glons always render outside ALL local content.
-	const outerLayerRadius = anchorRingEnd;
+	// rendered around the sun. Peer band sits beyond this so remote
+	// glons always render outside ALL local content.
+	const outerLayerRadius = localOuterRadius + MIN_RING_GAP + 1.5;
 
 	// Remote peers always live BEYOND the entire local layer (rings
 	// AND anchor halo). Reads as truly "out there" — another ecosystem
@@ -691,8 +633,7 @@ export function buildCosmos(state, materials) {
 			}
 
 			// Log-scaled size by change count (floor at 0.5, gentler growth).
-			const vScale = valueScaleFor(obj);
-			const changeScale = vScale != null ? vScale : Math.max(0.5, Math.min(1.6, Math.log10(1 + obj.changeCount) * 0.5 + 0.6));
+			const changeScale = Math.max(0.5, Math.min(1.6, Math.log10(1 + obj.changeCount) * 0.5 + 0.6));
 			let r = scale * placementScale * changeScale * 0.6;
 			let baseEmissive;
 			let mat;
@@ -751,10 +692,10 @@ export function buildCosmos(state, materials) {
 					baseEmissive = 0.25;
 				}
 			}
-			const mesh = new THREE.Mesh(typeKey === "chain.anchor" ? materials.sphereSmall : materials.sphere, mat);
+			const mesh = new THREE.Mesh(materials.sphere, mat);
 			mesh.position.copy(pos);
 			mesh.scale.setScalar(r);
-			mesh.userData = { kind: "object", id: obj.id, typeKey, obj, valueScale: vScale };
+			mesh.userData = { kind: "object", id: obj.id, typeKey, obj };
 			applyStoredStyle(mesh);
 			group.add(mesh);
 			// Sun-peer corona: prominent outer glow around peered remote
@@ -897,49 +838,12 @@ export function buildCosmos(state, materials) {
 		v.orbitCenterY = 0;
 
 	}
-	// Anchor spiral: chain was walked + pruned earlier (up where peer-
-	// band placement needed the outer-extent). Here we just lay out
-	// the renderable head on the pre-computed ring band:
-	//   - Only the NEWEST MAX_VISIBLE_ANCHORS (chain-head) are visible.
-	//     Older history still lives in the DAG; just not rendered as
-	//     individual spheres.
-	//   - DTHETA tuned so visible anchors span ~2 turns regardless of
-	//     count → a compact ribbon, not a sprawling coil.
-	if (renderableChain.length > 0) {
-		const renderN = renderableChain.length;
-		const totalSweep = renderN > 1 ? Math.PI * 4 : 0;   // ~2 turns
-		const DTHETA = renderN > 1 ? totalSweep / (renderN - 1) : 0;
-		const DR = renderN > 1 ? anchorRadialSpan / (renderN - 1) : 0;
-		const R0 = anchorRingStart;
-		for (let i = 0; i < renderableChain.length; i++) {
-			const obj = renderableChain[i];
-			const node = nodes.get(obj.id);
-			if (!node) continue;
-			const theta = i * DTHETA + 0.3;
-			const r = R0 + i * DR;
-			const y = jitterY(obj.id) * 0.08;
-			const pos = new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r);
-			positions.get(obj.id).copy(pos);
-			node.mesh.position.copy(pos);
-			if (node.halo) node.halo.position.copy(pos);
-			node.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
-			// Head anchor (newest) gets a size + glow boost so the chain tip is obvious.
-			if (i === renderableChain.length - 1) {
-				node.mesh.scale.multiplyScalar(1.6);
-				visuals.get(obj.id).baseRadius *= 1.6;
-				if (node.mesh.material.emissiveIntensity !== undefined) {
-					node.mesh.material.emissiveIntensity = 0.8;
-				}
-			}
-		}
-	}
 
 	// Links — updatable line geometry instead of per-frame TubeGeometry recreation
 	const linkMeshes = [];
 	const LINK_STYLE = {
 		spawn_parent:  { color: "#ffc857", opacity: 0.85, width: 2 },
 		owner:         { color: "#60a5fa", opacity: 0.7,  width: 2 },
-		token:         { color: "#4ade80", opacity: 0.7,  width: 2 },
 		principal:     { color: "#f472b6", opacity: 0.6,  width: 1.5 },
 		target:        { color: "#a78bfa", opacity: 0.5,  width: 1.5 },
 		context_source:{ color: "#94a3b8", opacity: 0.4,  width: 1 },
@@ -969,47 +873,6 @@ export function buildCosmos(state, materials) {
 		mesh.userData = { kind: "link", link, isLineage, a: a.clone(), b: b.clone(), mid: new THREE.Vector3() };
 		group.add(mesh);
 		linkMeshes.push(mesh);
-	}
-
-	// Anchor chain-line: walks only the renderable head of the chain
-	// (positions outside this set were never assigned, so the line
-	// would emit NaN for them). Visualises the recent history as a
-	// single line through the ribbon.
-	if (renderableChain.length > 1) {
-		const chainPositions = new Float32Array(renderableChain.length * 3);
-		for (let i = 0; i < renderableChain.length; i++) {
-			const p = positions.get(renderableChain[i].id);
-			if (!p) continue;
-			chainPositions[i * 3] = p.x;
-			chainPositions[i * 3 + 1] = p.y;
-			chainPositions[i * 3 + 2] = p.z;
-		}
-		const chainGeom = new THREE.BufferGeometry();
-		chainGeom.setAttribute("position", new THREE.BufferAttribute(chainPositions, 3));
-		const chainMat = new THREE.LineBasicMaterial({
-			color: 0xfbbf24,
-			transparent: true,
-			opacity: 0.45,
-			depthWrite: false,
-		});
-		const chainLine = new THREE.Line(chainGeom, chainMat);
-		chainLine.userData = { kind: "anchor-chain-line" };
-		group.add(chainLine);
-
-		// Update the line positions each frame by hooking into the existing tick.
-		chainLine.userData.update = () => {
-			const posAttr = chainLine.geometry.attributes.position;
-			const arr = posAttr.array;
-			for (let i = 0; i < renderableChain.length; i++) {
-				const p = positions.get(renderableChain[i].id);
-				if (!p) continue;
-				arr[i * 3] = p.x;
-				arr[i * 3 + 1] = p.y;
-				arr[i * 3 + 2] = p.z;
-			}
-			posAttr.needsUpdate = true;
-		};
-		linkMeshes.push(chainLine); // push so tick() visits it
 	}
 
 	// Selection indicator: the selected ball gets a strong emissive boost

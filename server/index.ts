@@ -332,8 +332,6 @@ app.get("/api/wallet", (_req, res) => {
 });
 
 
-	// Coin overview routes were removed along with the /coin program.
-
 	// Program registry: auto-discover what programs glon is running.
 	app.get("/api/programs", async (_req, res) => {
 		const programs = await getPrograms();
@@ -431,7 +429,6 @@ app.get("/api/wallet", (_req, res) => {
 		}
 	});
 
-// /api/pay/authorize + /api/pay/settle (x402) were stripped along with /coin.
 // ── Error handler ──────────────────────────────────────────────────
 app.use((err: any, req: any, res: any, next: any) => {
 	console.error(`[ERROR] ${req.method} ${req.path}:`, err?.message ?? String(err));
