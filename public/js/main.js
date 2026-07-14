@@ -3,25 +3,23 @@
  *
  * Responsibilities:
  *   - Fetch the graph snapshot + pick an agent to feature
- *   - Set up three.js scene, camera, lights, controls, raycaster
+ *   - Set up the TypeGPU/WebGPU scene, camera, lights, controls, picking
  *   - Instantiate the cosmos view and the agent view as two groups
  *   - Manage interaction: hover, click-to-select, double-click-to-focus
  *   - Animate camera transitions between modes
  *   - Wire the legend, the inspector panel, search box, and the time scrubber
  */
 
-import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass }     from "three/addons/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import {
+	initRenderer, Vector3, Quaternion, Euler, PerspectiveCamera, OrbitLite,
+	GridHandle, PointLightHandle, AmbientLightHandle, intersectSpheres,
+} from "./gpu/renderer.js";
 import { buildCosmos } from "./cosmos.js";
 import { colorForType } from "./colors.js";
 	import { bindInspector, setLanding, showObject, clear as clearInspector, setContextState, showDaemonTask } from "./inspector.js";
 	import { setupLiveLog } from "./livelog.js";
 
 	import { initSpellBar } from "./spell-bar.js";
-	import { getRender, setRender, clearRender, applyToMesh, updateOverlays } from "./planet-styles.js";
 	import { initPhysics } from "./physics.js";
 
 	// ── Layout reset helper ─────────────────────────────────────────
@@ -56,7 +54,9 @@ import { colorForType } from "./colors.js";
 	// ── State ──────────────────────────────────────────────────────────
 let snapshot = null;
 
-	let scene, camera, renderer, composer, controls;
+	// `renderer` is the TypeGPU renderer handle (see gpu-src/renderer.js);
+	// `scene` is its retained-mode scene-shim root group.
+	let scene, camera, renderer, controls;
 	let cosmosCtx;
 	let pickables = [];         // meshes the raycaster considers
 	let selectedId = null;
@@ -76,14 +76,6 @@ let contextAgentId = null;
 	let lastMX = 0, lastMY = 0;
 	const MOUSELOOK_SENS = 0.003;
 
-
-	// Shared reusable geometries + materials.
-const materials = {
-	// Higher-poly spheres so the procedural surface texture and directional
-	// sun lighting render smoothly without faceting on close-up balls.
-	sphere: new THREE.SphereGeometry(1, 48, 32),
-	halo:   new THREE.SphereGeometry(1, 24, 18),
-};
 
 // ── Init ───────────────────────────────────────────────────────────
 
@@ -107,7 +99,7 @@ const materials = {
 		// Peer chat + peer detail floating panels were folded into the
 		// inspector. Their imports + inits are gone.
 		initSpellBar();
-		setupThree();
+		await setupGPU();
 		buildScenes();
 		bindUI();
 		setupLiveLog({
@@ -163,20 +155,13 @@ async function refreshContextActive() {
 }
 let contextActiveIds = new Set();
 
-function setupThree() {
+async function setupGPU() {
 	const canvas = document.getElementById("scene");
-	renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance", alpha: true });
-	renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
-	renderer.setSize(window.innerWidth, window.innerHeight);
-	renderer.setClearColor(0x000000, 0);
-	// Cinematic tone curve + sRGB output give the textured planets the same
-	// rich falloff a real solar-system viewer has.
-	renderer.toneMapping = THREE.ACESFilmicToneMapping;
-	renderer.toneMappingExposure = 1.15;
-	renderer.outputColorSpace = THREE.SRGBColorSpace;
-
-	scene = new THREE.Scene();
-	scene.fog = new THREE.Fog(0x000000, 40, 140);
+	// TypeGPU/WebGPU renderer. ACES tonemapping (exposure 1.15), linear
+	// black fog (40–140), and the bloom post chain all live inside the
+	// renderer — see gpu-src/renderer.js.
+	renderer = await initRenderer(canvas);
+	scene = renderer.scene;
 
 	// "Invisible giant in the middle of the galaxy" framing — but at
 	// page load, the giant is standing BACK so the user gets a wide
@@ -186,12 +171,12 @@ function setupThree() {
 	//
 	// Previous default (0, 6, 0) put the camera right at the sun's
 	// corona edge, which felt like spawning *inside* the sun.
-	camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 400);
+	camera = new PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 400);
 	camera.position.set(0, 40, 95);
 	camera.rotation.order = "YXZ";
 	camera.lookAt(0, 0, 0);
 
-	controls = new OrbitControls(camera, canvas);
+	controls = new OrbitLite(camera, canvas);
 	// Mouse rotation is handled by our own yaw/pitch handler below
 	// (true "turn the giant's head" rather than orbit-around-a-target).
 	// OrbitControls stays in the picture only for mouse-wheel zoom and
@@ -203,7 +188,7 @@ function setupThree() {
 	// snapping toward world origin. The custom look handler keeps this
 	// target glued ahead during rotation; WASD moves them together.
 	(() => {
-		const fwd = new THREE.Vector3();
+		const fwd = new Vector3();
 		camera.getWorldDirection(fwd);
 		controls.target.copy(camera.position).add(fwd.multiplyScalar(3));
 	})();
@@ -213,9 +198,9 @@ function setupThree() {
 	controls.maxDistance = 100;
 	controls.addEventListener("start", () => { followId = null; });
 
-	// Spatial reference is the world-anchored clock face (see
-	// buildSceneClock) \u2014 12 o'clock is fixed at world -Z so a node's
-	// position relative to the dial means the same thing from any angle.
+	// Spatial reference is the neon floor grid (see buildScenes) \u2014
+	// 12 o'clock is fixed at world -Z so a node's position relative
+	// to the scene means the same thing from any angle.
 
 	// Lighting model: Graice IS the sun. A single bright PointLight sits
 	// where the agent ball lives (origin) and lights every other ball from
@@ -224,13 +209,13 @@ function setupThree() {
 	// the universe genuinely revolves around the agent.
 	// Tiny ambient: just enough to keep terminator-side detail readable
 	// without lifting the void. Pure black ambient = silhouettes disappear.
-	scene.add(new THREE.AmbientLight(0x1a2030, 0.06));
+	scene.add(new AmbientLightHandle(0x1a2030, 0.06));
 	// Graice's surface stays brand-teal-green (emissive map), but the light
 	// it CASTS on planets is warm \u2014 real suns are blackbody emitters around
 	// 5000\u20136000K, which reads as a soft golden cream, not a clinical white.
 	// Decoupling cast color from surface color is the same trick lensflares
 	// use: a green star can still throw warm sunlight on its system.
-	const graiceSun = new THREE.PointLight(0xffe0a8, 1.0, 220, 1.4);
+	const graiceSun = new PointLightHandle(0xffe0a8, 1.0, 220, 1.4);
 	graiceSun.position.set(0, 0, 0);
 	scene.add(graiceSun);
 
@@ -239,56 +224,10 @@ function setupThree() {
 	// below the threshold (their emissive baseline is 0.05) unless they're
 	// fresh-heated, at which point they momentarily flare \u2014 a deliberate
 	// secondary cue for live activity.
-	composer = new EffectComposer(renderer);
-	composer.addPass(new RenderPass(scene, camera));
-	const bloom = new UnrealBloomPass(
-		new THREE.Vector2(window.innerWidth, window.innerHeight),
-		0.55,   // strength  (was 1.1)
-		0.55,   // radius    (was 0.7)
-	);
-	composer.addPass(bloom);
+	// Bloom is built into the renderer's post chain (bright-pass → blur →
+	// composite) with the same strength (0.55) the UnrealBloomPass had.
 
 	window.addEventListener("resize", onResize);
-
-	// Planet render changes from inspector — update mesh immediately
-	window.addEventListener("planet-render-changed", (e) => {
-		const node = cosmosCtx?.nodes?.get(e.detail.objectId);
-		if (e.detail.render === null) {
-			// Reset: clear stored style and re-apply defaults
-			clearRender(e.detail.objectId);
-			if (node?.mesh) {
-				const typeKey = node.mesh.userData.typeKey;
-				const { hex } = colorForType(typeKey);
-				node.mesh.material.color.set(hex);
-				node.mesh.material.emissive.set(hex);
-				// Remove any custom children added by Three.js renders
-				const group = node.mesh.userData._planetGroup;
-				if (group) {
-					while (group.children.length > 0) {
-						const child = group.children[0];
-						if (child.geometry) child.geometry.dispose();
-						if (child.material) {
-							if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
-							else child.material.dispose();
-						}
-						group.remove(child);
-					}
-				}
-				// Remove canvas texture if present
-				if (node.mesh.material.map) {
-					node.mesh.material.map.dispose();
-					node.mesh.material.map = null;
-				}
-				// Restore default emissive intensity based on type
-				const isFeatured = typeKey === "agent" || typeKey === "trading_agent";
-				node.mesh.material.emissiveIntensity = isFeatured ? 1.4 : 0.05;
-				node.mesh.material.needsUpdate = true;
-			}
-		} else if (e.detail.render) {
-			setRender(e.detail.objectId, e.detail.render);
-			if (node?.mesh) applyToMesh(node.mesh, e.detail.render);
-		}
-	});
 	canvas.addEventListener("pointermove", onPointerMove);
 	canvas.addEventListener("click", onClick);
 	canvas.addEventListener("dblclick", onDoubleClick);
@@ -313,15 +252,15 @@ function setupThree() {
 	let lookStartX = 0, lookStartY = 0;
 	let lookLastX = 0, lookLastY = 0;
 	function applyLookDelta(dx, dy) {
-		const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
+		const euler = new Euler().setFromQuaternion(camera.quaternion, "YXZ");
 		euler.y -= dx * LOOK_SENSITIVITY;
 		euler.x -= dy * LOOK_SENSITIVITY;
 		euler.x = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, euler.x));
 		euler.z = 0;
 		camera.quaternion.setFromEuler(euler);
-		// Keep controls.target glued ~3 units ahead so OrbitControls'
-		// wheel-zoom + the focus-tween code stay coherent.
-		const fwd = new THREE.Vector3();
+		// Keep controls.target glued ~3 units ahead so the wheel-zoom +
+		// focus-tween code stay coherent.
+		const fwd = new Vector3();
 		camera.getWorldDirection(fwd);
 		controls.target.copy(camera.position).add(fwd.multiplyScalar(3));
 	}
@@ -381,13 +320,8 @@ function setupThree() {
 		if (e.button !== 2) return;
 		rightMouseDown = false;
 		canvas.releasePointerCapture(e.pointerId);
-		// Sync OrbitControls to current camera so it doesn't snap back
-		const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
-		controls._spherical.setFromVector3(offset);
-		controls._spherical.makeSafe();
-		controls._sphericalDelta.set(0, 0, 0);
-		controls._panOffset.set(0, 0, 0);
-		controls._scale = 1;
+		// Sync controls to current camera so they don't snap back
+		controls.syncFromCamera();
 		controls.enabled = true;
 		controls.update();
 	});
@@ -403,7 +337,7 @@ function setupThree() {
 }
 
 	function buildScenes() {
-		cosmosCtx = buildCosmos(snapshot, materials);
+		cosmosCtx = buildCosmos(snapshot, renderer);
 		scene.add(cosmosCtx.group);
 
 		// World-anchored clock face is the scene's sole spatial reference.
@@ -415,31 +349,20 @@ function setupThree() {
 		// floor grid is a quieter spatial reference than the round clock
 		// face — gives a sense of distance and direction without the
 		// dial's noon-hand line drawing the eye through origin.
-		const grid = new THREE.GridHelper(200, 100, 0x5eead4, 0x0d2b28);
+		const grid = new GridHandle(200, 100, 0x5eead4, 0x0d2b28, 0.5);
 		grid.position.y = gridY;
-		if (grid.material) {
-			// GridHelper actually has two materials internally (.material
-			// can be an array); ensure both are dim so the floor doesn't
-			// dominate the scene.
-			const mats = Array.isArray(grid.material) ? grid.material : [grid.material];
-			for (const m of mats) {
-				m.transparent = true;
-				m.opacity = 0.5;
-				m.depthWrite = false;
-			}
-		}
 		scene.add(grid);
 
 		// Upward-pointing neon lights to brighten the dark void
-		const gridLight = new THREE.PointLight(0x5eead4, 1.8, 160, 1.3);
+		const gridLight = new PointLightHandle(0x5eead4, 1.8, 160, 1.3);
 		gridLight.position.set(0, gridY, 0);
 		scene.add(gridLight);
 
-		const gridLight2 = new THREE.PointLight(0x2dd4bf, 0.9, 120, 1.4);
+		const gridLight2 = new PointLightHandle(0x2dd4bf, 0.9, 120, 1.4);
 		gridLight2.position.set(50, gridY + 4, 40);
 		scene.add(gridLight2);
 
-		const gridLight3 = new THREE.PointLight(0x2dd4bf, 0.9, 120, 1.4);
+		const gridLight3 = new PointLightHandle(0x2dd4bf, 0.9, 120, 1.4);
 		gridLight3.position.set(-50, gridY + 4, -40);
 		scene.add(gridLight3);
 
@@ -919,7 +842,7 @@ function bindUI() {
 		followId = null;
 		// Ghost camera: placed at the actual destination, looking at the target.
 		// This produces the correct quaternion for an offset birds-eye position.
-		const ghost = new THREE.PerspectiveCamera();
+		const ghost = new PerspectiveCamera();
 		ghost.position.copy(targetPos);
 		ghost.lookAt(targetLookAt);
 
@@ -944,12 +867,7 @@ function bindUI() {
 				controls.target.copy(targetLookAt);
 				camera.position.copy(toPos);
 				camera.quaternion.copy(toQuat);
-				const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
-				controls._spherical.setFromVector3(offset);
-				controls._spherical.makeSafe();
-				controls._sphericalDelta.set(0, 0, 0);
-				controls._panOffset.set(0, 0, 0);
-				controls._scale = 1;
+				controls.syncFromCamera();
 				controls.enabled = true;
 				controls.enableDamping = savedDamping;
 				controls.update();
@@ -963,8 +881,10 @@ function easeInOut(t) {
 
 // ── Interaction ───────────────────────────────────────────────────
 
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
+// Pointer in NDC (x/y in [-1,1]) + the world-space ray through it,
+// refreshed on every pointermove. Replaces THREE.Raycaster.
+const mouse = { x: 0, y: 0 };
+let cursorRay = null;
 let pointer = { x: 0, y: 0 };
 
 // Cursor magnet: the animate loop reads `cursorActive` to decide whether to
@@ -986,23 +906,23 @@ let cursorActive = false;
 			lastMX = e.clientX;
 			lastMY = e.clientY;
 
-			const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
+			const offset = new Vector3().subVectors(camera.position, controls.target);
 			// Yaw around world Y
-			const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -dx * MOUSELOOK_SENS);
+			const yawQ = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), -dx * MOUSELOOK_SENS);
 			offset.applyQuaternion(yawQ);
 			// Pitch around camera right axis
-			const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), offset).normalize();
+			const right = new Vector3().crossVectors(new Vector3(0, 1, 0), offset).normalize();
 			if (right.lengthSq() > 0.001) {
-				const pitchQ = new THREE.Quaternion().setFromAxisAngle(right, -dy * MOUSELOOK_SENS);
+				const pitchQ = new Quaternion().setFromAxisAngle(right, -dy * MOUSELOOK_SENS);
 				offset.applyQuaternion(pitchQ);
 			}
 			camera.position.copy(controls.target).add(offset);
 			camera.lookAt(controls.target);
-			return; // skip raycaster/tooltips while dragging
+			return; // skip picking/tooltips while dragging
 		}
 
-		raycaster.setFromCamera(mouse, camera);
-		const hits = raycaster.intersectObjects(visiblePickables(), false);
+		cursorRay = camera.rayFromNDC(mouse.x, mouse.y);
+		const hits = intersectSpheres(cursorRay, visiblePickables());
 		const first = hits[0]?.object;
 		if (!first) {
 			hoverId = null;
@@ -1032,8 +952,8 @@ function visiblePickables() {
 function onClick(e) {
 	// Ignore clicks that land on UI overlays.
 	if (e.target !== renderer.domElement) return;
-	raycaster.setFromCamera(mouse, camera);
-	const hits = raycaster.intersectObjects(visiblePickables(), false);
+	const ray = camera.rayFromNDC(mouse.x, mouse.y);
+	const hits = intersectSpheres(ray, visiblePickables());
 	const first = hits[0]?.object;
 	if (!first) return;
 	const ud = first.userData;
@@ -1050,8 +970,8 @@ function onClick(e) {
 
 function onDoubleClick(e) {
 	if (e.target !== renderer.domElement) return;
-	raycaster.setFromCamera(mouse, camera);
-	const hits = raycaster.intersectObjects(visiblePickables(), false);
+	const ray = camera.rayFromNDC(mouse.x, mouse.y);
+	const hits = intersectSpheres(ray, visiblePickables());
 	const first = hits[0]?.object;
 	if (!first) return;
 	const ud = first.userData;
@@ -1063,7 +983,7 @@ function onDoubleClick(e) {
 		const s = first.scale.x;
 		const worldR = r * s;
 		const birdsEyeHeight = Math.max(28, worldR * 5 + 12);
-		const birdsEyePos = new THREE.Vector3(target.x + worldR * 3, target.y + birdsEyeHeight, target.z + worldR * 3);
+		const birdsEyePos = new Vector3(target.x + worldR * 3, target.y + birdsEyeHeight, target.z + worldR * 3);
 		tweenCamera(birdsEyePos, target);
 		select(ud.id);
 		followId = ud.id;
@@ -1093,12 +1013,12 @@ function onDoubleClick(e) {
 		// the floor of the ring, but stay at giant's eye-level Y. This
 		// keeps the visual frame "tall thing looking out at the ring"
 		// instead of dropping the camera onto the ring's plane.
-		const horizontalDir = new THREE.Vector3(target.x, 0, target.z);
+		const horizontalDir = new Vector3(target.x, 0, target.z);
 		const horizontalDist = horizontalDir.length();
 		if (horizontalDist < 0.001) {
 			// Node is directly above/below the giant — pull camera back
 			// along its current view direction.
-			const back = new THREE.Vector3();
+			const back = new Vector3();
 			camera.getWorldDirection(back);
 			tweenCamera(target.clone().sub(back.multiplyScalar(dist)), target);
 			return;
@@ -1396,18 +1316,17 @@ function animate() {
 	}
 
 	const t = now / 1000;
-	const ray = cursorActive ? raycaster.ray : null;
+	const ray = cursorActive ? cursorRay : null;
 	// Cosmos: balls float gently and lean toward the cursor; tubes follow them.
 	if (cosmosCtx?.tick && cosmosCtx.group.visible) cosmosCtx.tick(t, dt, ray);
-	updateOverlays(camera, renderer);
 	if (!activeTween) {
 		if (rightMouseDown) {
 			// Camera-relative WASD while in mouselook mode
-			const fwd = new THREE.Vector3();
+			const fwd = new Vector3();
 			camera.getWorldDirection(fwd);
-			const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
-			const up = new THREE.Vector3(0, 1, 0);
-			const move = new THREE.Vector3();
+			const right = new Vector3().crossVectors(fwd, new Vector3(0, 1, 0)).normalize();
+			const up = new Vector3(0, 1, 0);
+			const move = new Vector3();
 			if (keys.w) move.add(fwd);
 			if (keys.s) move.sub(fwd);
 			if (keys.d) move.add(right);
@@ -1421,12 +1340,12 @@ function animate() {
 			}
 		} else {
 			// WASD pan: move camera + target in the horizontal plane.
-			const fwd = new THREE.Vector3();
+			const fwd = new Vector3();
 			camera.getWorldDirection(fwd);
 			fwd.y = 0;
 			fwd.normalize();
-			const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
-			const pan = new THREE.Vector3();
+			const right = new Vector3().crossVectors(fwd, new Vector3(0, 1, 0)).normalize();
+			const pan = new Vector3();
 			if (keys.w) pan.add(fwd);
 			if (keys.s) pan.sub(fwd);
 			if (keys.d) pan.add(right);
@@ -1446,15 +1365,15 @@ function animate() {
 			// Q/E orbit around target
 			if (keys.q || keys.e) {
 				const angle = (keys.q ? -1 : 1) * 2.0 * dt;
-				const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
-				const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+				const offset = new Vector3().subVectors(camera.position, controls.target);
+				const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), angle);
 				offset.applyQuaternion(q);
 				camera.position.copy(controls.target).add(offset);
 			}
 			controls.update();
 		}
 	}
-	composer.render();
+	renderer.render(camera);
 
 	drawLabels();
 
@@ -1474,7 +1393,7 @@ function animate() {
 		labelCtx.font = "12px ui-monospace, 'SF Mono', Menlo, monospace";
 		labelCtx.textBaseline = "top";
 
-		const screen = new THREE.Vector3();
+		const screen = new Vector3();
 		const dpr = window.devicePixelRatio || 1;
 		// Show all labels when Ctrl is held, otherwise only pinned (selected/hovered).
 		// Skip protobuf-like names — use shortId instead.
@@ -1512,82 +1431,6 @@ function animate() {
 // e.g. `A1` is top-left, `H4` is bottom-right at 8\u00d74. CSS handles the
 // layout via custom properties so this stays the only source of truth
 // for the cell count.
-
-// \u2500\u2500 World-anchored clock face \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-//
-// Adds a teal ring + a single radial "spawn hand" lying flat on the
-// floor. The hand marks the angular origin (world -Z); siblings are
-// sorted temporally around it (newest just clockwise of the hand,
-// oldest just counter-clockwise — see cosmos.js XII_GAP). Hour ticks
-// and Roman labels were removed; the hand alone communicates "this
-// is where things begin / appear / are read from".
-//
-//   12 o'clock \u21d2 world -Z
-//    3 o'clock \u21d2 world +X
-//    6 o'clock \u21d2 world +Z
-//    9 o'clock \u21d2 world -X
-//
-// Hours advance clockwise viewed from above (camera default is +Y looking
-// down/toward origin).
-function buildSceneClock(scene, opts = {}) {
-	const THREE_ = (typeof THREE !== "undefined") ? THREE : globalThis.THREE;
-	const y = opts.y ?? -11.95;
-	const radius = opts.radius ?? 80;
-	const color = opts.color ?? 0x5eead4;
-	const group = new THREE_.Group();
-	group.position.y = y;
-
-	// Outer ring (thin annulus that sits flat).
-	const ringInner = radius - 0.35;
-	const ringOuter = radius + 0.35;
-	const ringGeom = new THREE_.RingGeometry(ringInner, ringOuter, 192);
-	const ringMat = new THREE_.MeshBasicMaterial({
-		color,
-		transparent: true,
-		opacity: 0.45,
-		side: THREE_.DoubleSide,
-		depthWrite: false,
-	});
-	const ring = new THREE_.Mesh(ringGeom, ringMat);
-	ring.rotation.x = -Math.PI / 2;
-	group.add(ring);
-
-	// Noon hand: a thin flat rectangle lying on the floor from origin
-	// out to the XII tick. Marks the spawn line without intruding into
-	// the node volume above.
-	const handLen = radius - 0.5;
-	const handMat = new THREE_.MeshBasicMaterial({
-		color,
-		transparent: true,
-		opacity: 0.8,
-		side: THREE_.DoubleSide,
-		depthWrite: false,
-	});
-	const handGeom = new THREE_.PlaneGeometry(0.9, handLen);
-	const hand = new THREE_.Mesh(handGeom, handMat);
-	hand.rotation.x = -Math.PI / 2;
-	hand.position.set(0, 0.01, -handLen / 2);
-	group.add(hand);
-
-	// Center cap so the wall visually anchors at the origin.
-	const capGeom = new THREE_.CircleGeometry(1.8, 32);
-	const capMat = new THREE_.MeshBasicMaterial({
-		color,
-		transparent: true,
-		opacity: 0.9,
-		side: THREE_.DoubleSide,
-		depthWrite: false,
-	});
-	const cap = new THREE_.Mesh(capGeom, capMat);
-	cap.rotation.x = -Math.PI / 2;
-	cap.position.y = 0.02;
-	group.add(cap);
-
-
-	scene.add(group);
-	return group;
-}
-
 
 // \u2500\u2500 Draggable panels \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
@@ -1786,8 +1629,7 @@ function onResize() {
 	const w = window.innerWidth;
 	const h = window.innerHeight;
 	const dpr = window.devicePixelRatio || 1;
-	renderer.setSize(w, h);
-	composer?.setSize(w, h);
+	renderer.resize(w, h, Math.min(2, dpr));
 	camera.aspect = w / h;
 	camera.updateProjectionMatrix();
 	labelCanvas.width = w * dpr;

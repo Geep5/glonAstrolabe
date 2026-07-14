@@ -7,11 +7,12 @@
 	<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪐</text></svg>" />
 	<link rel="stylesheet" href="./style.css?v=1" />
 
+	<!-- The 3D renderer is TypeGPU/WebGPU, bundled into ./js/gpu/renderer.js
+	     (see scripts/build-gpu.mjs). Only the Rapier physics WASM module
+	     still loads through the import map. -->
 	<script type="importmap">
 		{
 			"imports": {
-				"three": "/vendor/three/build/three.module.js",
-				"three/addons/": "/vendor/three/examples/jsm/",
 				"@dimforge/rapier3d-compat": "/vendor/rapier/rapier.es.js"
 			}
 		}
@@ -160,23 +161,6 @@
 				<div id="insp-changes" class="change-dag"></div>
 			</div>
 
-			<div class="insp-section" id="insp-style-section" hidden>
-				<h3 class="collapsible">Aesthetic Node</h3>
-				<div id="insp-style-body" style="display:none">
-					<div class="forge-keyrow">
-						<input type="password" id="insp-forge-key" placeholder="OpenAI API key" />
-						<button id="insp-forge-key-save">Save</button>
-					</div>
-					<div class="forge-history" id="insp-forge-history"></div>
-					<div class="forge-status" id="insp-forge-status"></div>
-					<div class="forge-inputrow">
-						<input type="text" id="insp-forge-input" placeholder="Describe customization..." />
-						<button id="insp-forge-send">Send</button>
-						<button id="insp-forge-apply" disabled>Apply</button>
-						<button id="insp-forge-reset">Reset</button>
-					</div>
-				</div>
-			</div>
 		</div>
 	</aside>
 
@@ -206,6 +190,6 @@
 
 	<div id="tooltip" class="tooltip" hidden></div>
 
-	<script type="module" src="./js/main.js?v=5"></script>
+	<script type="module" src="./js/main.js?v=6"></script>
 </body>
 </html>

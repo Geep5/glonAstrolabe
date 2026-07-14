@@ -18,9 +18,10 @@
  * + magnet-displaced ball positions exactly.
  */
 
-	import * as THREE from "three";
+	import {
+		Vector3, Group, SphereHandle, RingHandle, TorusHandle, LineHandle, PointLightHandle,
+	} from "./gpu/renderer.js";
 	import { colorForType } from "./colors.js";
-	import { applyStoredStyle } from "./planet-styles.js";
 	import { getWorld, getRapier, step } from "./physics.js";
 
 // \u2500\u2500 Procedural planet textures \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -31,10 +32,13 @@
 // of every other agent world but distinct from a "program" world. Cheap
 // (~60 fillRect calls per type, ~10 types in practice) and zero network
 // fetches \u2014 no texture assets to ship.
+//
+// Returns the GPU texture-array layer index for the baked surface
+// (uploaded via the TypeGPU renderer), not a texture object.
 const planetTextureCache = new Map();
-function planetTextureFor(typeKey, hex) {
+function planetTextureFor(typeKey, hex, gpu) {
 	const cached = planetTextureCache.get(typeKey);
-	if (cached) return cached;
+	if (cached !== undefined) return cached;
 	const W = 256, H = 128;
 	const canvas = document.createElement("canvas");
 	canvas.width = W;
@@ -75,12 +79,9 @@ function planetTextureFor(typeKey, hex) {
 		if (x + r > W) drawBlotch(ctx, x - W, y, r, tinted, alpha);
 	}
 
-	const tex = new THREE.CanvasTexture(canvas);
-	tex.colorSpace = THREE.SRGBColorSpace;
-	tex.wrapS = THREE.RepeatWrapping;
-	tex.anisotropy = 4;
-	planetTextureCache.set(typeKey, tex);
-	return tex;
+	const layer = gpu.uploadPlanetTexture(canvas);
+	planetTextureCache.set(typeKey, layer);
+	return layer;
 }
 
 function drawBlotch(ctx, x, y, r, rgb, alpha) {
@@ -273,47 +274,22 @@ const SELECT_BOOST   = 3.2;        // emissive intensity boost when selected
 const PUSH_LERP    = 0.20;
 const PUSH_PADDING = 0.15;
 
-// Build a dashed equator ring as a LineLoop on a LineDashedMaterial. The
-// loop's continuous polyline lets line-distance accumulate around the full
-// circle so the dash pattern reads cleanly. computeLineDistances() runs
-// once at unit radius; subsequent scaling of the group preserves the dash
-// count (both lineDistance and dashSize live in geometry space).
+// Build a dashed equator ring. The renderer draws RingHandles as unit
+// circles in the XZ plane with a dash coordinate in arc-length space,
+// so scaling the handle preserves the dash count — same behaviour the
+// old LineDashedMaterial setup had.
 //
 // Returns `{ group, material }` so the per-frame tick can lerp opacity on
 // the shared material with a single assignment.
 function makeDashedRing({ color, dashSize, gapSize }) {
-	const SEG = 96;
-	const material = new THREE.LineDashedMaterial({
-		color,
-		transparent: true,
-		opacity: 0,
-		dashSize,
-		gapSize,
-		depthWrite: false,
-	});
-	const group = new THREE.Group();
-
-	const pos = new Float32Array(SEG * 3);
-	for (let j = 0; j < SEG; j++) {
-		const t = (j / SEG) * Math.PI * 2;
-		pos[j * 3]     = Math.cos(t);
-		pos[j * 3 + 1] = 0;
-		pos[j * 3 + 2] = Math.sin(t);
-	}
-	const geom = new THREE.BufferGeometry();
-	geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-	const ring = new THREE.LineLoop(geom, material);
-	ring.computeLineDistances();
-	group.add(ring);
-
-	return { group, material };
+	const ring = new RingHandle({ color, dashSize, gapSize, opacity: 0 });
+	return { group: ring, material: ring.material };
 }
 
 // ── Scene construction ───────────────────────────────────────────
 
-export function buildCosmos(state, materials) {
-	const group = new THREE.Group();
-	group.name = "cosmos";
+export function buildCosmos(state, gpu) {
+	const group = new Group("cosmos");
 
 	const byType = new Map();
 	for (const obj of state.objects) {
@@ -357,8 +333,8 @@ export function buildCosmos(state, materials) {
 	}
 	const spawnDepthOf = (obj) => Number(obj.scalars?.spawn_depth ?? 0);
 
-	const positions = new Map(); // id → THREE.Vector3
-	const homePositions = new Map(); // id → THREE.Vector3 (frozen after placement)
+	const positions = new Map(); // id → Vector3
+	const homePositions = new Map(); // id → Vector3 (frozen after placement)
 	const nodes = new Map();     // id → { mesh, ring, halo? }
 
 	const visuals = new Map();   // id → visual state (lastSeen, baseEmissive, etc.)
@@ -465,7 +441,7 @@ export function buildCosmos(state, materials) {
 			// -π/2 offset = first slot at 12-o'clock (toward -Z),
 			// matching the scene-clock convention.
 			const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
-			out.set(ids[i], new THREE.Vector3(
+			out.set(ids[i], new Vector3(
 				Math.cos(angle) * radius,
 				RING_Y,
 				Math.sin(angle) * radius,
@@ -535,27 +511,19 @@ export function buildCosmos(state, materials) {
 	// sphere, drawn larger than any DAG node so it reads as the center
 	// of its own system.
 	{
-		const sunGeo = new THREE.SphereGeometry(2.4, 48, 32);
-		const sunMat = new THREE.MeshStandardMaterial({
-			color: 0x2a1d0a,
-			emissive: 0xffc66b,
-			emissiveIntensity: 1.5,
-			roughness: 0.4,
-			toneMapped: false,
-		});
-		const sun = new THREE.Mesh(sunGeo, sunMat);
+		const sun = new SphereHandle({ mode: 0, texLayer: -1, toneMapped: false });
+		sun.material.color.set(0x2a1d0a);
+		sun.material.emissive.set(0xffc66b);
+		sun.material.emissiveIntensity = 1.5;
+		sun.scale.setScalar(2.4);
 		sun.position.set(0, RING_Y, 0);
 		sun.userData = { kind: "local-sun" };
 		group.add(sun);
 		// Faint corona — slightly larger transparent sphere for glow.
-		const coronaGeo = new THREE.SphereGeometry(3.6, 32, 24);
-		const coronaMat = new THREE.MeshBasicMaterial({
-			color: 0xffc66b,
-			transparent: true,
-			opacity: 0.18,
-			depthWrite: false,
-		});
-		const corona = new THREE.Mesh(coronaGeo, coronaMat);
+		const corona = new SphereHandle({ mode: 2 });
+		corona.material.color.set(0xffc66b);
+		corona.material.opacity = 0.18;
+		corona.scale.setScalar(3.6);
 		corona.position.copy(sun.position);
 		corona.userData = { kind: "local-sun-corona" };
 		group.add(corona);
@@ -575,7 +543,7 @@ export function buildCosmos(state, materials) {
 		// positions come from primaryRingPosition (global pre-pass above).
 		const { scale, featured } = layoutForType(typeKey);
 		const { color, hex } = colorForType(typeKey);
-		const surface = planetTextureFor(typeKey, hex);
+		const surface = planetTextureFor(typeKey, hex, gpu);
 
 		// Deterministic iteration (matches the order used to build
 		// primaryRingPosition above) so satellite-index math stays stable.
@@ -601,7 +569,7 @@ export function buildCosmos(state, materials) {
 				const theta = sCount <= 1
 					? hash01(obj.id) * Math.PI * 2
 					: (sIdx / sCount) * Math.PI * 2;
-				pos = new THREE.Vector3(
+				pos = new Vector3(
 					parentPos.x + Math.cos(theta) * offsetR,
 					parentPos.y + jitterY(obj.id) * 0.4 + 0.5,
 					parentPos.z + Math.sin(theta) * offsetR,
@@ -624,7 +592,7 @@ export function buildCosmos(state, materials) {
 					// Defensive fallback (shouldn't happen if pre-pass
 					// and iteration order match) — drop the object at
 					// origin so it's visible and obviously misplaced.
-					pos = new THREE.Vector3(0, RING_Y, 0);
+					pos = new Vector3(0, RING_Y, 0);
 				}
 				orbitRadius = 0;
 				orbitAngle = 0;
@@ -636,24 +604,21 @@ export function buildCosmos(state, materials) {
 			const changeScale = Math.max(0.5, Math.min(1.6, Math.log10(1 + obj.changeCount) * 0.5 + 0.6));
 			let r = scale * placementScale * changeScale * 0.6;
 			let baseEmissive;
-			let mat;
+			// Material recipe for the SphereHandle, applied after creation.
+			// mode 1 = emissive-map surface (featured), mode 0 = lit planet.
+			let matSpec;
 			if (isFeatured) {
 				baseEmissive = 1.4;
-				mat = new THREE.MeshStandardMaterial({
-					color: 0x000000,
-					emissive: 0xc8ffe6,
-					emissiveMap: surface,
-					emissiveIntensity: baseEmissive,
-					toneMapped: false,
-				});
+				matSpec = {
+					mode: 1, texLayer: surface, toneMapped: false,
+					color: 0x000000, emissive: 0xc8ffe6, emissiveIntensity: baseEmissive,
+				};
 			} else {
 				baseEmissive = 0.05;
-				mat = new THREE.MeshLambertMaterial({
-					color: 0xffffff,
-					map: surface,
-					emissive: color,
-					emissiveIntensity: baseEmissive,
-				});
+				matSpec = {
+					mode: 0, texLayer: surface, toneMapped: true,
+					color: 0xffffff, emissive: color, emissiveIntensity: baseEmissive,
+				};
 			}
 			// Remote peers (other glon agents we've discovered via Discord's
 			// #roster forum) get a dedicated visual treatment:
@@ -672,44 +637,41 @@ export function buildCosmos(state, materials) {
 					// sun" rather than a node when seen from across the
 					// void (~70 units out).
 					r = Math.max(r, 3.0);
-					mat = new THREE.MeshStandardMaterial({
-						color: 0x2a1d0a,
-						emissive: 0xffc66b,
-						emissiveIntensity: 1.8,
-						roughness: 0.4,
-						toneMapped: false,
-					});
+					matSpec = {
+						mode: 0, texLayer: -1, toneMapped: false,
+						color: 0x2a1d0a, emissive: 0xffc66b, emissiveIntensity: 1.8,
+					};
 					baseEmissive = 1.8;
 				} else {
 					// MOON — discovered, not yet peered. Bigger than a
 					// generic node so it's still legible across the void.
 					r = Math.max(r, 1.4);
-					mat = new THREE.MeshLambertMaterial({
+					matSpec = {
+						mode: 0, texLayer: -1, toneMapped: true,
 						color: 0x9ca3af,        // cool grey moonlight
-						emissive: 0x4a5158,
-						emissiveIntensity: 0.25,
-					});
+						emissive: 0x4a5158, emissiveIntensity: 0.25,
+					};
 					baseEmissive = 0.25;
 				}
 			}
-			const mesh = new THREE.Mesh(materials.sphere, mat);
+			const mesh = new SphereHandle({
+				mode: matSpec.mode, texLayer: matSpec.texLayer, toneMapped: matSpec.toneMapped,
+			});
+			mesh.material.color.set(matSpec.color);
+			mesh.material.emissive.set(matSpec.emissive);
+			mesh.material.emissiveIntensity = matSpec.emissiveIntensity;
 			mesh.position.copy(pos);
 			mesh.scale.setScalar(r);
 			mesh.userData = { kind: "object", id: obj.id, typeKey, obj };
-			applyStoredStyle(mesh);
 			group.add(mesh);
 			// Sun-peer corona: prominent outer glow around peered remote
 			// glons, matching the local sun's treatment so connected
 			// glons read as "another sun" even from far across the void.
 			if (remotePeer && isPeeredPeer(obj)) {
-				const coronaGeo = new THREE.SphereGeometry(r * 1.7, 32, 20);
-				const coronaMat = new THREE.MeshBasicMaterial({
-					color: 0xffc66b,
-					transparent: true,
-					opacity: 0.30,
-					depthWrite: false,
-				});
-				const corona = new THREE.Mesh(coronaGeo, coronaMat);
+				const corona = new SphereHandle({ mode: 2 });
+				corona.material.color.set(0xffc66b);
+				corona.material.opacity = 0.30;
+				corona.scale.setScalar(r * 1.7);
 				corona.position.copy(pos);
 				corona.userData = { kind: "peer-sun-corona", id: obj.id };
 				group.add(corona);
@@ -737,15 +699,13 @@ export function buildCosmos(state, materials) {
 			// code drops them right onto this visible ring.
 			if (isAgentType && !orbitParentOf.has(obj.id)) {
 				const localOrbitR = Math.max(2.5, r * 2.4);
-				const ringGeo = new THREE.TorusGeometry(localOrbitR, 0.06, 8, 64);
-				const ringMat = new THREE.MeshBasicMaterial({
+				// TorusHandle already lies flat in the XZ plane.
+				const agentOrbitRing = new TorusHandle({
+					radius: localOrbitR,
+					tube: 0.06,
 					color: 0x5eead4,
-					transparent: true,
 					opacity: 0.35,
-					depthWrite: false,
 				});
-				const agentOrbitRing = new THREE.Mesh(ringGeo, ringMat);
-				agentOrbitRing.rotation.x = Math.PI / 2;     // lay flat in the XZ plane around the agent
 				agentOrbitRing.position.copy(pos);
 				agentOrbitRing.userData = { kind: "agent-orbit", id: obj.id };
 				group.add(agentOrbitRing);
@@ -821,7 +781,7 @@ export function buildCosmos(state, materials) {
 			sCount * 0.45,
 		);
 		const theta = angleFor(sIdx, sCount, "sub" + parentId);
-		const newPos = new THREE.Vector3(
+		const newPos = new Vector3(
 			parentPos.x + Math.cos(theta) * orbitR,
 			parentPos.y + jitterY(childId) * 0.4,
 			parentPos.z + Math.sin(theta) * orbitR,
@@ -858,19 +818,14 @@ export function buildCosmos(state, materials) {
 		const style = LINK_STYLE[link.relationKey] ?? DEFAULT_LINK_STYLE;
 		const isLineage = link.relationKey === "spawn_parent";
 
-		// Pre-allocate buffer geometry with curve points
-		const posArray = new Float32Array((LINK_SEGMENTS + 1) * 3);
-		const geometry = new THREE.BufferGeometry();
-		geometry.setAttribute("position", new THREE.BufferAttribute(posArray, 3));
-
-		const mat = new THREE.LineBasicMaterial({
-			color: new THREE.Color(style.color),
-			transparent: true,
+		// Pre-allocated polyline; curve points rewritten each tick.
+		const mesh = new LineHandle({
+			pointCount: LINK_SEGMENTS + 1,
+			mode: "strip",
+			color: style.color,
 			opacity: style.opacity,
-			linewidth: style.width, // note: WebGL line width is limited
 		});
-		const mesh = new THREE.Line(geometry, mat);
-		mesh.userData = { kind: "link", link, isLineage, a: a.clone(), b: b.clone(), mid: new THREE.Vector3() };
+		mesh.userData = { kind: "link", link, isLineage, a: a.clone(), b: b.clone(), mid: new Vector3() };
 		group.add(mesh);
 		linkMeshes.push(mesh);
 	}
@@ -879,22 +834,22 @@ export function buildCosmos(state, materials) {
 	// (SELECT_BOOST) so it glows brightly. A PointLight follows it so nearby
 	// planets pick up real specular reflections. The halo keeps its type color
 	// and only shows context/heat state.
-	const selectLight = new THREE.PointLight(0xffffff, 0, 18, 2.0);
+	const selectLight = new PointLightHandle(0xffffff, 0, 18, 2.0);
 	selectLight.visible = false;
 	group.add(selectLight);
-	let _lastLightPos = new THREE.Vector3();
+	let _lastLightPos = new Vector3();
 	let selectedId = null;
 
 	// ── Per-frame float + tube re-anchoring ────────────────────
 	// Every ball drifts independently on x/y/z via id-seeded sin waves;
 	// no global rotation. Tube geometries follow the moving endpoints.
-	const tmpA = new THREE.Vector3();
-	const tmpB = new THREE.Vector3();
-	const tmpMid = new THREE.Vector3();
-	const tmpOut = new THREE.Vector3();
-	const tmpBase = new THREE.Vector3();
-	const tmpClosest = new THREE.Vector3();
-	const yAxis = new THREE.Vector3(0, 1, 0);
+	const tmpA = new Vector3();
+	const tmpB = new Vector3();
+	const tmpMid = new Vector3();
+	const tmpOut = new Vector3();
+	const tmpBase = new Vector3();
+	const tmpClosest = new Vector3();
+	const yAxis = new Vector3(0, 1, 0);
 	// Reused per-frame buffer for highlight spheres. Cleared and refilled in
 	// Reused per-frame buffer for highlight spheres. Cleared and refilled in
 	// Bump heat for an object id (called from the SSE event handler in main.js).
@@ -1187,9 +1142,8 @@ export function buildCosmos(state, materials) {
 			}
 			tmpMid.addScaledVector(yAxis, lift);
 
-			// Update pre-allocated buffer geometry directly
-			const posAttr = m.geometry.attributes.position;
-			const arr = posAttr.array;
+			// Update the pre-allocated polyline directly
+			const arr = m.points;
 			for (let i = 0; i <= LINK_SEGMENTS; i++) {
 				const t = i / LINK_SEGMENTS;
 				const u = 1 - t;
@@ -1200,7 +1154,6 @@ export function buildCosmos(state, materials) {
 				arr[i * 3 + 1] = w0 * tmpA.y + w1 * tmpMid.y + w2 * tmpB.y;
 				arr[i * 3 + 2] = w0 * tmpA.z + w1 * tmpMid.z + w2 * tmpB.z;
 			}
-			posAttr.needsUpdate = true;
 		}
 	}
 
@@ -1254,21 +1207,18 @@ export function buildCosmos(state, materials) {
 			seen.add(key);
 			const peerPos = conv.peer_object_id ? primaryRingPosition.get(conv.peer_object_id) : null;
 			const angle = convoAngle(conv, peerPos);
-			const nodePos = new THREE.Vector3(
+			const nodePos = new Vector3(
 				Math.cos(angle) * CONVO_RADIUS,
 				CONVO_Y,
 				Math.sin(angle) * CONVO_RADIUS,
 			);
 			let entry = conversationNodes.get(key);
 			if (!entry) {
-				const geo = new THREE.SphereGeometry(0.7, 24, 16);
-				const mat = new THREE.MeshStandardMaterial({
-					color: 0x000000,
-					emissive: 0xffc66b,        // warm yellow — sun-channel color
-					emissiveIntensity: 1.2,
-					toneMapped: false,
-				});
-				const mesh = new THREE.Mesh(geo, mat);
+				const mesh = new SphereHandle({ mode: 0, texLayer: -1, toneMapped: false });
+				mesh.material.color.set(0x000000);
+				mesh.material.emissive.set(0xffc66b);  // warm yellow — sun-channel color
+				mesh.material.emissiveIntensity = 1.2;
+				mesh.scale.setScalar(0.7);
 				mesh.userData = {
 					kind: "conversation",
 					channel: "sun-to-sun",     // future: "agent-to-agent" | "human-to-agent"
@@ -1279,15 +1229,12 @@ export function buildCosmos(state, materials) {
 				group.add(mesh);
 				// Two-segment connector: sun → node → peer (or just sun
 				// → node when the peer isn't drawable).
-				const lineGeo = new THREE.BufferGeometry();
-				const linePos = new Float32Array(12);
-				lineGeo.setAttribute("position", new THREE.BufferAttribute(linePos, 3));
-				const lineMat = new THREE.LineBasicMaterial({
+				const glowLine = new LineHandle({
+					pointCount: 4,
+					mode: "segments",
 					color: 0xffc66b,
-					transparent: true,
 					opacity: 0.4,
 				});
-				const glowLine = new THREE.LineSegments(lineGeo, lineMat);
 				glowLine.userData = { kind: "conversation-link", peer_agent_uuid: conv.peer_agent_uuid };
 				group.add(glowLine);
 				entry = { mesh, glowLine };
@@ -1305,7 +1252,7 @@ export function buildCosmos(state, materials) {
 			// Refresh connector: sun → node, then node → peer (if known)
 			// or node → node-extension (so the line still has two visible
 			// segments and the geometry buffer stays a stable size).
-			const arr = entry.glowLine.geometry.attributes.position.array;
+			const arr = entry.glowLine.points;
 			arr[0] = 0;            arr[1] = RING_Y;     arr[2] = 0;          // sun
 			arr[3] = nodePos.x;    arr[4] = nodePos.y;  arr[5] = nodePos.z;  // convo node (end of segment 1)
 			arr[6] = nodePos.x;    arr[7] = nodePos.y;  arr[8] = nodePos.z;  // convo node (start of segment 2)
@@ -1319,17 +1266,12 @@ export function buildCosmos(state, materials) {
 				arr[10] = CONVO_Y;
 				arr[11] = Math.sin(angle) * (CONVO_RADIUS + 6);
 			}
-			entry.glowLine.geometry.attributes.position.needsUpdate = true;
 		}
 		// Reap dropped conversations.
 		for (const [k, entry] of conversationNodes) {
 			if (seen.has(k)) continue;
 			group.remove(entry.mesh);
 			group.remove(entry.glowLine);
-			entry.mesh.geometry.dispose();
-			entry.mesh.material.dispose();
-			entry.glowLine.geometry.dispose();
-			entry.glowLine.material.dispose();
 			conversationNodes.delete(k);
 		}
 	}

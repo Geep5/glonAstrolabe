@@ -1,12 +1,10 @@
 /**
  * Inspector panel — renders object detail, change DAG, link list,
  * and agent summary into the right-side panel. Pure DOM builder:
- * nothing here knows about three.js.
+ * nothing here knows about the 3D renderer.
  */
 
 	import { colorForType } from "./colors.js";
-	import { getRender } from "./planet-styles.js";
-	import * as planetForge from "./planet-forge.js";
 
 
 	const els = {
@@ -26,15 +24,6 @@
 		contentBody: document.getElementById("insp-content"),
 		changes: document.getElementById("insp-changes"),
 		changeCount: document.getElementById("insp-change-count"),
-		styleSection: document.getElementById("insp-style-section"),
-		forgeHistory: document.getElementById("insp-forge-history"),
-		forgeStatus: document.getElementById("insp-forge-status"),
-		forgeInput: document.getElementById("insp-forge-input"),
-		forgeSend: document.getElementById("insp-forge-send"),
-		forgeApply: document.getElementById("insp-forge-apply"),
-		forgeReset: document.getElementById("insp-forge-reset"),
-		forgeKey: document.getElementById("insp-forge-key"),
-		forgeKeySave: document.getElementById("insp-forge-key-save"),
 		stats: document.getElementById("stats"),
 		// Discord-link containers. Astrolabe is no longer a chat client —
 		// the chat lives in the agents' Discord guild. We just render
@@ -48,17 +37,6 @@
 		selfChatsLinks: document.getElementById("insp-self-chats-links"),
 	};
 
-	// Wire up Planet Forge once
-	planetForge.init({
-		historyEl: els.forgeHistory,
-		statusEl: els.forgeStatus,
-		inputEl: els.forgeInput,
-		sendBtn: els.forgeSend,
-		applyBtn: els.forgeApply,
-		resetBtn: els.forgeReset,
-		keyInput: els.forgeKey,
-		keySaveBtn: els.forgeKeySave,
-	});
 	let handlers = {};
 
 export function bindInspector({ onNavigate, onInject }) {
@@ -199,7 +177,6 @@ export function showDaemonTask(task) {
 	if (els.peerChatSection) els.peerChatSection.hidden = true;
 	els.scalarsSection.hidden = true;
 	els.linksSection.hidden = true;
-	els.styleSection.hidden = true;
 	els.contentSection.hidden = true;
 	els.changes.innerHTML = "";
 	els.changeCount.textContent = "";
@@ -317,7 +294,6 @@ function render(detail, changesResponse) {
 	}
 
 	// Style section (all objects) --------------------------------
-	renderStyleSection(obj.id);
 
 	// Content preview -------------------------------------------
 	if (detail.contentPreview) {
@@ -350,26 +326,6 @@ function render(detail, changesResponse) {
 	}
 }
 
-
-	// ── Style section ────────────────────────────────────────────
-
-	function renderStyleSection(objectId) {
-		els.styleSection.hidden = false;
-		planetForge.setTarget(objectId);
-
-		if (!els.styleSection._wired) {
-			els.styleSection._wired = true;
-			const header = els.styleSection.querySelector(".collapsible");
-			const body = document.getElementById("insp-style-body");
-			if (header && body) {
-				header.addEventListener("click", () => {
-					const isHidden = body.style.display === "none";
-					body.style.display = isHidden ? "block" : "none";
-					header.classList.toggle("expanded", isHidden);
-				});
-			}
-		}
-	}
 
 	// ── DOM helpers ────────────────────────────────────────────────
 

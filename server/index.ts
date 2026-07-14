@@ -10,7 +10,7 @@
  *   GET /api/events/recent               last ≤200 events as JSON
  *   GET /api/meta                        host/data root info
  *   static /                             frontend from public/
- *   static /vendor/*                     mapped to node_modules/three/* for bare ES imports
+ *   static /vendor/*                     mapped to node_modules for bare ES imports (rapier)
  */
 
 import express from "express";
@@ -292,40 +292,9 @@ app.get("/api/events/recent", (_req, res) => {
 	});
 
 
-	// Planet Forge — AI-assisted planet styling. Proxies to OpenAI.
-	app.post("/api/planet-forge", async (req, res) => {
-		const { messages, apiKey } = req.body;
-		if (!Array.isArray(messages) || messages.length === 0) {
-			return res.status(400).json({ error: "messages array required" });
-		}
-		const key = apiKey || process.env.OPENAI_API_KEY;
-		if (!key) {
-			return res.status(400).json({ error: "OpenAI API key required. Set OPENAI_API_KEY env var or pass apiKey in request." });
-		}
-		try {
-			const r = await fetch("https://api.openai.com/v1/chat/completions", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					"Authorization": `Bearer ${key}`,
-				},
-				body: JSON.stringify({
-					model: "gpt-4o",
-					messages,
-					temperature: 0.8,
-					max_tokens: 2048,
-				}),
-			});
-			if (!r.ok) {
-				const body = await r.text();
-				return res.status(502).json({ error: `OpenAI API error (${r.status})`, body });
-			}
-			const data = await r.json();
-			res.json(data);
-		} catch (err: any) {
-			res.status(503).json({ error: "could not reach OpenAI", detail: err?.message ?? String(err) });
-		}
-	});
+	// Planet Forge endpoint removed along with the Aesthetic Node feature
+	// (its LLM-generated three.js styling died with the TypeGPU port).
+
 // Wallet pubkeys (local-only, read-only)
 app.get("/api/wallet", (_req, res) => {
 	res.json({ pubkeys: [...getWalletPubkeys()] });
@@ -436,12 +405,12 @@ app.use((err: any, req: any, res: any, next: any) => {
 	res.status(500).json({ ok: false, error: err?.message ?? "Internal server error" });
 });
 
-// ── Static: three.js + frontend ────────────────────────────────────
+// ── Static: vendor modules + frontend ──────────────────────────────
 //
-// Serve three's ESM bundle from node_modules so the browser can resolve
-// bare `three` imports via an importmap (see public/index.html).
+// Serve rapier's ESM bundle from node_modules so the browser can resolve
+// its bare import via an importmap (see public/index.html). The TypeGPU
+// renderer ships pre-bundled at public/js/gpu/renderer.js.
 
-	app.use("/vendor/three", express.static(join(ROOT, "node_modules", "three")));
 	app.use("/vendor/rapier", express.static(join(ROOT, "node_modules", "@dimforge", "rapier3d-compat")));
 	app.use(express.static(join(ROOT, "public"), { extensions: ["html"] }));
 

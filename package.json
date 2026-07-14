@@ -5,19 +5,24 @@
 	"type": "module",
 	"description": "Interactive 3D visualization of a Glon environment — objects, programs, and the LLM agent's DAG-backed conversation.",
 	"scripts": {
-		"dev": "tsx --watch server/index.ts",
-		"start": "tsx server/index.ts"
+		"build:gpu": "node scripts/build-gpu.mjs",
+		"dev": "npm run build:gpu && tsx --watch server/index.ts",
+		"start": "npm run build:gpu && tsx server/index.ts"
 	},
 	"dependencies": {
+		"@dimforge/rapier3d-compat": "^0.14.0",
 		"express": "^4.21.0",
 		"protobufjs": "^7.5.3",
-		"three": "^0.168.0",
-		"@dimforge/rapier3d-compat": "^0.14.0"
+		"typegpu": "^0.11.9",
+		"wgpu-matrix": "^3.4.2"
 	},
 	"devDependencies": {
 		"@types/express": "^4.17.21",
 		"@types/node": "^22.0.0",
+		"@webgpu/types": "^0.1.71",
+		"esbuild": "^0.28.1",
 		"tsx": "^4.19.0",
-		"typescript": "^5.8.0"
+		"typescript": "^5.8.0",
+		"unplugin-typegpu": "^0.11.6"
 	}
 }

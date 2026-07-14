@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<title>gpu smoke test</title>
+	<script type="importmap">
+		{ "imports": { "@dimforge/rapier3d-compat": "/vendor/rapier/rapier.es.js" } }
+	</script>
+	<style>html,body{margin:0;background:#0a0c10;color:#9fe8d8;font:12px monospace}#out{position:fixed;top:4px;left:4px;z-index:2;white-space:pre}</style>
+</head>
+<body>
+<canvas id="scene" style="position:fixed;inset:0;width:100%;height:100%"></canvas>
+<div id="out">booting…</div>
+<script type="module">
+import { initRenderer, PerspectiveCamera, intersectSpheres } from "./js/gpu/renderer.js";
+import { buildCosmos } from "./js/cosmos.js";
+import { initPhysics } from "./js/physics.js";
+
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+
+function fakeObj(id, typeKey, extra = {}) {
+	return {
+		id, typeKey,
+		name: id,
+		changeCount: 3, blockCount: 0, linkOutCount: 0,
+		createdAt: Date.now() - 100000, updatedAt: Date.now() - 5000,
+		scalars: {}, deleted: false,
+		...extra,
+	};
+}
+
+try {
+	await initPhysics();
+	log("physics ok");
+	const canvas = document.getElementById("scene");
+	const gpu = await initRenderer(canvas);
+	log("renderer ok");
+
+	const objects = [
+		fakeObj("agent-1", "agent", { agentStats: { lastActivity: Date.now() } }),
+		fakeObj("peer-grant", "peer"),
+		fakeObj("chat-1", "chat"),
+		fakeObj("ttt-1", "ttt"),
+		fakeObj("prog-1", "program"),
+		fakeObj("prog-2", "program"),
+		fakeObj("ts-1", "typescript"),
+		fakeObj("fact-1", "pinned_fact"),
+		fakeObj("remote-peer", "peer", { scalars: {
+			identity_pubkey: "a".repeat(64), hyperswarm_pubkey: "b".repeat(64),
+			last_seen: String(Date.now()), trust_level: "trusted",
+		}}),
+		fakeObj("moon-peer", "peer", { scalars: {
+			identity_pubkey: "c".repeat(64), hyperswarm_pubkey: "d".repeat(64),
+			last_seen: String(Date.now()), trust_level: "discovered",
+		}}),
+		fakeObj("anchor-1", "chain.anchor", { scalars: { height: "1" } }),
+		fakeObj("anchor-2", "chain.anchor", { scalars: { height: "2", previous_anchor: "anchor-1" } }),
+		fakeObj("anchor-3", "chain.anchor", { scalars: { height: "3", previous_anchor: "anchor-2" } }),
+	];
+	const links = [
+		{ sourceId: "fact-1", targetId: "agent-1", relationKey: "owner" },
+		{ sourceId: "chat-1", targetId: "agent-1", relationKey: "principal" },
+		{ sourceId: "prog-2", targetId: "prog-1", relationKey: "target" },
+	];
+	const ctx = buildCosmos({ objects, links }, gpu);
+	gpu.scene.add(ctx.group);
+	log(`cosmos ok: ${ctx.nodes.size} nodes`);
+
+	ctx.updateConversations([{ peer_identity_pubkey: "a".repeat(64), peer_object_id: "remote-peer", peer_display_name: "Remo", last_message_at: Date.now() }]);
+	ctx.setSelected("prog-1");
+	ctx.bumpHeat("chat-1");
+	ctx.setContextActive(new Set(["fact-1"]));
+
+	const W = innerWidth || 800, H = innerHeight || 450;
+	const camera = new PerspectiveCamera(55, W / H, 0.1, 400);
+	camera.position.set(0, 26, 60);
+	camera.lookAt(0, 0, 0);
+	gpu.resize(W, H, 1);
+
+	// Drive frames manually (rAF may be throttled in a hidden tab).
+	let frames = 0;
+	const t0 = performance.now();
+	for (let i = 0; i < 5; i++) {
+		const t = (performance.now() - t0) / 1000;
+		const ray = camera.rayFromNDC(0.1, 0.0);
+		ctx.tick(t + i * 0.016, 0.016, ray);
+		gpu.render(camera);
+		await new Promise((r) => setTimeout(r, 0));
+	}
+	frames = 5;
+	window.__gpu = gpu;
+	window.__camera = camera;
+	window.__ctx = ctx;
+
+	// Picking check: shoot a ray at the agent node.
+	const agentNode = ctx.nodes.get("agent-1");
+	const p = agentNode.mesh.position;
+	camera.updateMatrices();
+	const sp = p.clone().project(camera);
+	const hits = intersectSpheres(camera.rayFromNDC(sp.x, sp.y), [...ctx.nodes.values()].map(n => n.mesh));
+	log(`pick ok: hit=${hits[0]?.object?.userData?.id ?? "none"}`);
+
+	const err = await gpu.root.device.popErrorScope?.().catch(() => null) ?? null;
+	log(`frames ok: ${frames}`);
+	// On-demand frame hook so an external driver can request a fresh
+	// render right before taking a screenshot.
+	let tGlobal = 1;
+	window.__renderOnce = () => {
+		tGlobal += 0.2;
+		ctx.tick(tGlobal, 0.016, null);
+		gpu.render(camera);
+		return "rendered";
+	};
+	window.__testResult = { ok: true, nodes: ctx.nodes.size, pick: hits[0]?.object?.userData?.id ?? null };
+	log("ALL OK");
+} catch (e) {
+	console.error(e);
+	window.__testResult = { ok: false, error: String(e && e.stack || e) };
+	log("FAIL: " + (e && e.message || e));
+}
+</script>
+</body>
+</html>

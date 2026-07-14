@@ -69,7 +69,7 @@ growth.
                                    /api/peer-chat/* (read-only),
                                    /api/events (SSE)
                                    ↓
-                                   three.js frontend
+                                   TypeGPU/WebGPU frontend
                                    ↓ (chat surfaces)
                                    discord.com/channels/<guild>/...
 ```
@@ -193,17 +193,24 @@ glonAstrolabe/
 │ ├ index.html        shell + importmap + panels + agents widget
 │ ├ style.css
 │ └ js/
-│   ├ main.js          scene, camera, controls, raycasting, agents widget
+│   ├ main.js          scene, camera, controls, picking, agents widget
 │   ├ cosmos.js        ball layout, drift, magnet, heat, halo, link tubes
 │   ├ inspector.js     inspector DOM + Discord chat links + context bar
 │   ├ livelog.js       SSE client + console row renderer
 │   ├ spell-bar.js     panel-toggle keyboard shortcuts
-│   ├ planet-styles.js procedural planet surfaces
-│   ├ planet-forge.js  agent-driven render edits
 │   ├ physics.js       rapier WASM init
-│   └ colors.js        stable type palette + block colors
+│   ├ colors.js        stable type palette + block colors
+│   └ gpu/renderer.js  TypeGPU/WebGPU renderer (bundled — do not edit)
 └ snapshots/           screenshots
 ```
 
-No compile step on the frontend — `index.html` uses an importmap to
-resolve `three` from `node_modules`.
+Rendering is TypeGPU on WebGPU (a WebGPU-capable browser is required).
+`/test-gpu.html` is a renderer smoke test: it builds a synthetic cosmos
+(planets, halos, links, peers, anchors), drives frames manually, and
+reports `window.__testResult`.
+The renderer sources live in `gpu-src/` and are bundled to
+`public/js/gpu/renderer.js` by `npm run build:gpu` (runs automatically
+before `dev`/`start`; needed because TypeGPU's `'use gpu'` shaders
+require the `unplugin-typegpu` transform). The rest of the frontend
+stays buildless; `index.html`'s importmap only resolves the Rapier
+physics module from `node_modules`.

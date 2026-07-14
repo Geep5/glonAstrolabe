@@ -3,7 +3,7 @@
  * A few well-known types get hand-picked colors for brand consistency.
  */
 
-import * as THREE from "three";
+import { Color } from "./gpu/renderer.js";
 
 const FIXED = {
 	agent:      "#5eead4",
@@ -40,25 +40,25 @@ export function colorForType(typeKey) {
 	let hex;
 	if (FIXED[typeKey]) hex = FIXED[typeKey];
 	else hex = hslToHex(hashHue(typeKey), 65, 62);
-	const c = new THREE.Color(hex);
+	const c = new Color(hex);
 	cache.set(typeKey, { hex, color: c });
 	return { hex, color: c };
 }
 
 function hslToHex(h, s, l) {
-	const c = new THREE.Color();
+	const c = new Color();
 	c.setHSL(h / 360, s / 100, l / 100);
 	return "#" + c.getHexString();
 }
 
 export const BLOCK_COLORS = {
-	user_text:      new THREE.Color("#4dd4ff"),
-	assistant_text: new THREE.Color("#ff7ad6"),
-	tool_use:       new THREE.Color("#ffc857"),
-	tool_result:    new THREE.Color("#7ae582"),
-	tool_error:     new THREE.Color("#ff5b6b"),
-	compaction:     new THREE.Color("#b197fc"),
-	other:          new THREE.Color("#6b7488"),
+	user_text:      new Color("#4dd4ff"),
+	assistant_text: new Color("#ff7ad6"),
+	tool_use:       new Color("#ffc857"),
+	tool_result:    new Color("#7ae582"),
+	tool_error:     new Color("#ff5b6b"),
+	compaction:     new Color("#b197fc"),
+	other:          new Color("#6b7488"),
 };
 
 export function blockColor(block) {
